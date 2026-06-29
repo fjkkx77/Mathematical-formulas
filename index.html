@@ -1,0 +1,670 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+    <title>MD Reader Pro</title>
+    
+    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/marked-highlight/lib/index.umd.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/dompurify@3.4.10/dist/purify.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/mermaid@10.9.3/dist/mermaid.min.js"></script>
+
+    <script>
+        window.MathJax = {
+            tex: {
+                inlineMath: [['\\(', '\\)']],
+                displayMath: [['\\[', '\\]']],
+                processEscapes: true
+            },
+            options: {
+                ignoreHtmlClass: '.*',
+                processHtmlClass: 'math-display|math-inline'
+            },
+            startup: { typeset: false }
+        };
+    </script>
+    <script id="MathJax-script" async src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-chtml.js"></script>
+
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <link id="hljs-style" rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/github.min.css">
+    <link id="md-style" rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/github-markdown-css/5.5.0/github-markdown-light.min.css">
+    
+    <style>
+        /* ================= 1. Apple 风格色彩与底层锁死 ================= */
+        * { box-sizing: border-box; margin: 0; padding: 0; -webkit-tap-highlight-color: transparent; }
+        
+        :root {
+            --apple-blue: #007AFF; --apple-green: #34C759; --apple-red: #FF3B30; --apple-gray: #8E8E93;
+            --bg-base: #F2F2F7; --bg-surface: #FFFFFF; --text-main: #000000; --text-secondary: #6C6C70;
+            --border-color: #E5E5EA; --header-bg: rgba(255, 255, 255, 0.85); --sidebar-bg: #F8F8F8;
+            --header-height: 55px;
+        }
+        
+        [data-theme="dark"] {
+            --apple-blue: #0A84FF; --apple-green: #30D158; --apple-red: #FF453A;
+            --bg-base: #000000; --bg-surface: #1C1C1E; --text-main: #FFFFFF; --text-secondary: #EBEBF5;
+            --border-color: #38383A; --header-bg: rgba(28, 28, 30, 0.85); --sidebar-bg: #151515;
+        }
+        
+        html, body { height: 100%; width: 100%; overflow: hidden; }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", Arial, sans-serif;
+            background-color: var(--bg-base); color: var(--text-main);
+            display: flex; flex-direction: column;
+        }
+
+        /* ================= 2. 动态顶栏 ================= */
+        header {
+            flex-shrink: 0; height: calc(var(--header-height) + env(safe-area-inset-top));
+            padding-top: env(safe-area-inset-top); background: var(--header-bg);
+            backdrop-filter: blur(20px); -webkit-backdrop-filter: blur(20px);
+            border-bottom: 1px solid var(--border-color); display: flex; align-items: center;
+            justify-content: space-between; padding: 0 16px; z-index: 100;
+        }
+
+        .header-section { display: flex; align-items: center; gap: 6px; flex: 1; min-width: 0; }
+        .header-center { flex: 2; justify-content: center; text-align: center; min-width: 0; padding: 0 12px; }
+        .header-right { justify-content: flex-end; gap: 8px; flex: 1; min-width: 0; }
+
+        .icon-btn { background: none; border: none; color: var(--apple-blue); flex-shrink: 0; font-size: 1.3rem; padding: 8px; border-radius: 8px; cursor: pointer; display: flex; align-items: center; justify-content: center; transition: opacity 0.2s; }
+        .icon-btn:active { opacity: 0.5; }
+        
+        .text-btn { background: none; border: none; color: var(--apple-blue); flex-shrink: 0; font-size: 16px; font-weight: 500; padding: 6px 10px; border-radius: 6px; cursor: pointer; display: flex; align-items: center; gap: 4px; transition: background 0.2s; }
+        .text-btn:active { background: rgba(128,128,128,0.2); }
+        .text-btn.danger { color: var(--apple-red); }
+        .text-btn.primary { background: var(--apple-blue); color: white; font-weight: 600; }
+        .text-btn.primary:active { background: var(--apple-blue); opacity: 0.7; }
+
+        .logo-text { font-weight: 700; font-size: 1.1rem; color: var(--apple-blue); cursor: pointer; flex-shrink: 0; }
+        
+        .file-title-display { font-weight: 600; font-size: 1rem; color: var(--text-main); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%; display: block; cursor: pointer; transition: opacity 0.2s; }
+        .file-title-display:active { opacity: 0.4; }
+
+        .hidden { display: none !important; }
+
+        /* ================= 3. 布局与绝对滚动层 ================= */
+        .app-container { flex-grow: 1; position: relative; display: flex; overflow: hidden; }
+
+        .toc-sidebar { width: 250px; background: var(--sidebar-bg); border-right: 1px solid var(--border-color); overflow-y: auto; -webkit-overflow-scrolling: touch; padding: 20px 0; transition: transform 0.3s ease, width 0.3s ease; flex-shrink: 0; z-index: 10; }
+        @media (min-width: 768px) { .toc-sidebar.collapsed { width: 0; border: none; padding: 0; overflow: hidden; } }
+        .toc-title { font-size: 12px; font-weight: 600; color: var(--text-secondary); text-transform: uppercase; padding: 0 20px 10px; letter-spacing: 0.5px; }
+        .toc-link { display: block; padding: 8px 20px; color: var(--text-main); text-decoration: none; font-size: 14px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; border-left: 3px solid transparent; }
+        .toc-link:active { background: rgba(128,128,128,0.1); }
+        .toc-h1 { font-weight: 600; } .toc-h2 { padding-left: 30px; } .toc-h3 { padding-left: 40px; font-size: 13px; color: var(--text-secondary); }
+
+        .main-content { flex-grow: 1; position: relative; background: var(--bg-surface); overflow: hidden; }
+        .view-layer { position: absolute; top: 0; left: 0; right: 0; bottom: 0; overflow-y: auto; -webkit-overflow-scrolling: touch; background: var(--bg-surface); }
+
+        /* ================= 4. 核心视图样式 ================= */
+        .view-home { background: var(--bg-base); display: flex; align-items: center; justify-content: center; padding: 20px; }
+        .upload-card { background: var(--bg-surface); border-radius: 16px; padding: 40px; text-align: center; border: 1px solid var(--border-color); width: 100%; max-width: 400px; box-shadow: 0 4px 15px rgba(0,0,0,0.05); }
+        .upload-icon { font-size: 4rem; color: var(--apple-blue); margin-bottom: 20px; }
+        .upload-title { font-size: 1.2rem; font-weight: 500; margin-bottom: 24px; color: var(--text-secondary); }
+        .btn-upload-lg { background: var(--apple-green); color: white; padding: 12px 24px; border-radius: 8px; font-weight: 600; font-size: 15px; display: inline-flex; align-items: center; gap: 8px; cursor: pointer; transition: transform 0.1s; }
+        .btn-upload-lg:active { transform: scale(0.96); }
+
+        .view-read { padding: 30px 20px; padding-bottom: calc(30px + env(safe-area-inset-bottom)); }
+        .markdown-container { max-width: 900px; margin: 0 auto; }
+        .markdown-body { background: transparent !important; color: inherit !important; font-family: inherit !important; }
+
+        .markdown-body pre { position: relative; }
+        .markdown-body .code-block-wrapper { position: relative; }
+        .copy-code-btn { position: absolute; top: 8px; right: 8px; background: rgba(128, 128, 128, 0.2); backdrop-filter: blur(5px); -webkit-backdrop-filter: blur(5px); border: none; border-radius: 4px; padding: 4px 8px; font-size: 12px; color: var(--apple-blue); cursor: pointer; opacity: 0.6; transition: opacity 0.2s; z-index: 2; }
+        .copy-code-btn:hover { opacity: 1; }
+
+        .markdown-body .mermaid-wrapper { position: relative; }
+        .markdown-body .mermaid { overflow-x: auto; padding: 8px 0; }
+        .markdown-body .mermaid svg { max-width: 100%; }
+
+        /* MathJax 保护层样式 */
+        .math-display { display: block; margin: 1em 0; overflow-x: auto; }
+        .math-inline { display: inline-block; }
+
+        .view-edit { display: flex; flex-direction: column; overflow: hidden; }
+        .edit-pane, .preview-pane { flex: 1; overflow-y: auto; -webkit-overflow-scrolling: touch; padding: 20px; padding-bottom: calc(20px + env(safe-area-inset-bottom)); }
+        .edit-pane { background: var(--bg-surface); border-bottom: 1px solid var(--border-color); }
+        .preview-pane { background: var(--bg-base); }
+        #editor-textarea { width: 100%; height: 100%; resize: none; border: none; outline: none; background: transparent; color: var(--text-main); font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Microsoft YaHei", sans-serif; font-size: 16px; line-height: 1.6; padding: 5px; }
+
+        @media (min-width: 768px) { .view-edit { flex-direction: row; } .edit-pane { border-bottom: none; border-right: 1px solid var(--border-color); } }
+        @media (max-width: 767px) { 
+            .toc-sidebar { position: fixed; top: 0; left: -280px; width: 280px; height: 100%; z-index: 201; box-shadow: 2px 0 20px rgba(0,0,0,0.2); transition: transform 0.3s cubic-bezier(0.25, 0.8, 0.25, 1); } 
+            .toc-sidebar.mobile-open { transform: translateX(280px); } 
+            .desktop-only { display: none !important; } 
+        }
+
+        /* ================= 5. 左侧历史/文件夹抽屉 ================= */
+        .overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.4); z-index: 200; display: none; opacity: 0; transition: opacity 0.3s; }
+        .drawer { position: fixed; top: 0; left: 0; height: 100vh; width: 280px; background: var(--bg-surface); z-index: 201; transform: translateX(-100%); transition: transform 0.3s cubic-bezier(0.25, 0.8, 0.25, 1); display: flex; flex-direction: column; }
+        .drawer-header { padding: 20px; border-bottom: 1px solid var(--border-color); margin-top: env(safe-area-inset-top); font-weight: 600; font-size: 1.2rem; display: flex; justify-content: space-between; align-items: center; }
+        .drawer-content { overflow-y: auto; flex-grow: 1; padding-bottom: env(safe-area-inset-bottom); }
+        
+        .menu-action { padding: 12px 20px; display: flex; align-items: center; gap: 12px; color: var(--apple-blue); font-weight: 500; cursor: pointer; border-bottom: 1px solid var(--border-color); }
+        .menu-action:active { background: rgba(128,128,128,0.1); }
+        
+        /* 文件夹及拖拽样式 */
+        .folder-group { border-bottom: 1px solid var(--border-color); transition: border 0.2s; }
+        .folder-group.dragging { opacity: 0.4; background: var(--bg-base); }
+        .folder-group.drag-over { border-top: 2px solid var(--apple-blue); }
+        
+        .folder-header { padding: 12px 20px; display: flex; align-items: center; justify-content: space-between; background: var(--bg-base); cursor: pointer; user-select: none; }
+        .folder-header:active { background: var(--border-color); }
+        .folder-info { display: flex; align-items: center; gap: 8px; font-weight: 600; font-size: 14px; color: var(--text-main); }
+        .folder-icon { color: var(--apple-gray); width: 16px; text-align: center; }
+        .folder-actions { display: flex; gap: 10px; color: var(--text-secondary); }
+        .folder-btn { background: none; border: none; color: inherit; cursor: pointer; font-size: 14px; padding: 4px; transition: color 0.2s; }
+        .folder-btn:active { color: var(--apple-blue); }
+        
+        .folder-files { display: none; background: var(--bg-surface); }
+        .folder-group.open .folder-files { display: block; }
+        .folder-group.open .fa-chevron-right { transform: rotate(90deg); }
+        .fa-chevron-right { transition: transform 0.2s; font-size: 12px; color: var(--text-secondary); }
+
+        /* 文件项样式 */
+        .history-item { padding: 12px 16px 12px 36px; display: flex; align-items: center; position: relative; border-bottom: 1px solid var(--border-color); }
+        .history-item:last-child { border-bottom: none; }
+        .history-info { flex-grow: 1; display: flex; flex-direction: column; gap: 4px; overflow: hidden; cursor: pointer; padding-right: 10px; }
+        .history-title { font-size: 14px; font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; display: flex; align-items: center; color: var(--text-main); }
+        .history-date { font-size: 11px; color: var(--text-secondary); }
+        .history-more-btn { background: none; border: none; color: var(--text-secondary); padding: 8px 12px; cursor: pointer; border-radius: 6px; font-size: 16px; }
+        .history-more-btn:active, .history-more-btn.active { background: rgba(128,128,128,0.15); color: var(--text-main); }
+        
+        /* 悬浮菜单 & Tooltip */
+        .mobile-action-menu { position: fixed; bottom: calc(10px + env(safe-area-inset-bottom)); left: 10px; right: 10px; background: var(--header-bg); backdrop-filter: blur(25px); -webkit-backdrop-filter: blur(25px); border: 1px solid var(--border-color); border-radius: 16px; box-shadow: 0 -8px 30px rgba(0,0,0,0.12); z-index: 300; display: none; flex-direction: column; padding: 8px 0; max-height: 80vh; overflow-y: auto; }
+        .mobile-action-menu.show { display: flex; animation: slideInUp 0.3s cubic-bezier(0.25, 0.8, 0.25, 1); }
+        .action-item { padding: 16px 20px; display: flex; align-items: center; gap: 15px; cursor: pointer; color: var(--apple-blue); font-weight: 500; font-size: 17px; border-bottom: 1px solid rgba(128,128,128,0.1); }
+        .action-item:last-child { border-bottom: none; }
+        .action-item:active { background: rgba(128,128,128,0.15); }
+        .action-item.danger { color: var(--apple-red); }
+        .action-item.success { color: var(--apple-green); }
+        .action-item.title { font-size: 12px; color: var(--text-secondary); justify-content: center; text-transform: uppercase; letter-spacing: 0.5px; padding: 10px; cursor: default; border-bottom: none; }
+        .action-item.title:active { background: none; }
+        .action-item i { width: 20px; text-align: center; }
+        @keyframes slideInUp { from { transform: translateY(100%); opacity: 0; } to { transform: translateY(0); opacity: 1; } }
+
+        .title-tooltip { position: fixed; top: calc(var(--header-height) + env(safe-area-inset-top) + 10px); left: 50%; transform: translateX(-50%); background: var(--header-bg); backdrop-filter: blur(25px); -webkit-backdrop-filter: blur(25px); color: var(--text-main); padding: 10px 18px; border-radius: 12px; box-shadow: 0 8px 30px rgba(0,0,0,0.15); border: 1px solid var(--border-color); z-index: 1000; max-width: 90vw; word-break: break-all; font-weight: 500; font-size: 14px; text-align: center; opacity: 0; pointer-events: none; transition: opacity 0.3s ease; }
+        .title-tooltip.show { opacity: 1; pointer-events: auto; }
+
+        .fab-toc { position: fixed; bottom: calc(20px + env(safe-area-inset-bottom)); right: 20px; width: 50px; height: 50px; border-radius: 25px; background: var(--apple-blue); color: white; border: none; box-shadow: 0 4px 15px rgba(0, 122, 255, 0.4); font-size: 20px; z-index: 150; display: flex; align-items: center; justify-content: center; cursor: pointer; transition: transform 0.2s, opacity 0.2s, background 0.2s; }
+        .fab-toc:active { transform: scale(0.9); background: #005ecb; }
+
+    </style>
+</head>
+<body data-theme="light">
+
+    <header id="main-header">
+        <div class="header-section">
+            <button class="icon-btn" id="btn-hamburger" aria-label="菜单"><i class="fas fa-bars"></i></button>
+            <button class="text-btn hidden" id="btn-back"><i class="fas fa-chevron-left"></i> 返回</button>
+            <button class="text-btn danger hidden" id="btn-edit-cancel">取消</button>
+            <div class="logo-text" id="header-logo"><i class="fab fa-markdown"></i> MD Reader</div>
+        </div>
+        <div class="header-section header-center">
+            <div class="file-title-display hidden" id="header-title" title="点击查看完整名称"></div>
+        </div>
+        <div class="header-section header-right">
+            <button class="icon-btn hidden" id="btn-read-more" title="更多操作"><i class="fas fa-ellipsis-h"></i></button>
+            <button class="icon-btn hidden" id="btn-edit-more" title="编辑选项"><i class="fas fa-ellipsis-h"></i></button>
+            <button class="icon-btn hidden" id="btn-read-copy" title="复制全文"><i class="fas fa-copy"></i></button>
+            <button class="text-btn primary hidden" id="btn-read-edit"><i class="fas fa-edit"></i> 编辑</button>
+            <button class="text-btn hidden" id="btn-home-sample"><i class="fas fa-file-code"></i> 示例</button>
+            <button class="text-btn hidden" id="btn-edit-reset">重置</button>
+            <button class="text-btn primary hidden" id="btn-edit-save">保存</button>
+            <button class="icon-btn" id="btn-theme" aria-label="切换主题"><i class="fas fa-moon"></i></button>
+        </div>
+    </header>
+
+    <div class="app-container">
+        <div class="toc-sidebar collapsed" id="toc-sidebar">
+            <div class="toc-title">目录 Contents</div>
+            <div id="toc-content"></div>
+        </div>
+
+        <div class="main-content">
+            <div class="view-layer view-home" id="view-home">
+                <div class="upload-card">
+                    <i class="fas fa-file-alt upload-icon"></i>
+                    <div class="upload-title">轻量级 Markdown 阅读器</div>
+                    <label class="btn-upload-lg">
+                        <i class="fas fa-upload"></i> 打开 MD 文件
+                        <input type="file" id="file-upload-home" hidden>
+                    </label>
+                </div>
+            </div>
+  
+            <div class="view-layer view-read hidden" id="view-read">
+                <div class="markdown-container">
+                    <div class="markdown-body" id="reader-content"></div>
+                </div>
+            </div>
+        
+            <div class="view-layer view-edit hidden" id="view-edit">
+                <div class="edit-pane">
+                    <textarea id="editor-textarea" placeholder="在此输入 Markdown..."></textarea>
+                </div>
+                <div class="preview-pane">
+                    <div class="markdown-body" id="editor-preview"></div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <button class="fab-toc hidden mobile-only" id="btn-fab-toc" title="打开打开目录"><i class="fas fa-list-ul"></i></button>
+
+    <div class="overlay" id="overlay"></div>
+    <div class="drawer" id="drawer">
+        <div class="drawer-header">
+            <span>我的文件</span>
+            <div style="display: flex; gap: 4px;">
+                <button class="icon-btn" id="btn-sort" style="font-size: 16px; padding: 4px;" title="按时间排序"><i class="fas fa-sort-amount-down"></i></button>
+                <button class="icon-btn" id="btn-new-folder" style="font-size: 16px; padding: 4px;" title="新建文件夹"><i class="fas fa-folder-plus"></i></button>
+            </div>
+        </div>
+        <div class="drawer-content">
+            <div class="menu-action" id="menu-new" style="color: var(--apple-green);"><i class="fas fa-plus-circle"></i> 新建空白文档</div>
+            <label class="menu-action">
+                <i class="fas fa-file-upload"></i> 导入本地文件
+                <input type="file" id="file-upload-drawer" hidden>
+            </label>
+            <div id="history-list" style="margin-top: 10px;"></div>
+        </div>
+    </div>
+
+    <div class="overlay" id="toc-overlay" style="z-index: 200;"></div>
+    <div class="overlay" id="action-menu-overlay" style="z-index: 250;"></div>
+    <div class="mobile-action-menu" id="action-menu">
+        <div class="action-menu-content" id="action-menu-items"></div>
+    </div>
+    <div id="title-tooltip" class="title-tooltip"></div>
+
+    <script>
+        const { markedHighlight } = globalThis.markedHighlight;
+
+        // 【终极修复点】解除了前后空格的严格限制，完美兼容你的手写习惯
+        const mathExtension = {
+            name: 'math',
+            level: 'inline',
+            start(src) { return src.indexOf('$'); },
+            tokenizer(src, tokens) {
+                const blockRule = /^\$\$([\s\S]+?)\$\$/;
+                // 去除了原本严苛的 (?!\s) 和 (?<!\s)，允许公式内部前后带空格
+                const inlineRule = /^\$((?:\\.|[^\$\n])+?)\$/; 
+                let match;
+                if (match = blockRule.exec(src)) {
+                    return { type: 'math', raw: match[0], text: match[1], displayMode: true };
+                } else if (match = inlineRule.exec(src)) {
+                    return { type: 'math', raw: match[0], text: match[1], displayMode: false };
+                }
+                return false;
+            },
+            renderer(token) {
+                const safeText = token.text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+                if (token.displayMode) {
+                    return `<span class="math-display" style="display:block; margin: 1em 0;">\\[${safeText}\\]</span>`;
+                } else {
+                    return `<span class="math-inline">\\(${safeText}\\)</span>`;
+                }
+            }
+        };
+
+        marked.use(
+            { gfm: true, breaks: true },
+            markedHighlight({
+                langPrefix: 'hljs language-',
+                highlight(code, lang) {
+                    const language = hljs.getLanguage(lang) ? lang : 'plaintext';
+                    return hljs.highlight(code, { language }).value;
+                }
+            }),
+            { extensions: [mathExtension] },
+            { hooks: { postprocess: (html) => DOMPurify.sanitize(html, {
+                ADD_ATTR: ['style', 'aria-hidden', 'data-token', 'data-value', 'class'],
+                FORCE_BODY: false
+            }) } }
+        );
+
+        mermaid.initialize({ startOnLoad: false, theme: document.body.getAttribute('data-theme') === 'dark' ? 'dark' : 'default' });
+
+        const HLJS_VERSION = '11.9.0';
+        const HLJS_LANG_ALIAS = {
+            sh: 'bash', zsh: 'bash', ps1: 'powershell', pwsh: 'powershell',
+            'c++': 'cpp', cs: 'csharp', kt: 'kotlin', rs: 'rust', tex: 'latex',
+            vb: 'vbnet', asm: 'x86asm', proto: 'protobuf', objc: 'objectivec'
+        };
+        const HLJS_SKIP_LANGS = new Set(['plaintext', 'text', 'mermaid']);
+        const hljsLoadAttempted = new Set();
+
+        function loadHljsLanguage(file) {
+            if (hljs.getLanguage(file) || hljsLoadAttempted.has(file)) return Promise.resolve();
+            hljsLoadAttempted.add(file);
+            return new Promise((resolve) => {
+                const script = document.createElement('script');
+                script.src = `https://cdnjs.cloudflare.com/ajax/libs/highlight.js/${HLJS_VERSION}/languages/${file}.min.js`;
+                script.onload = resolve; script.onerror = resolve; 
+                document.head.appendChild(script);
+            });
+        }
+
+        function ensureCodeLanguagesLoaded(markdown) {
+            const files = new Set();
+            const fenceRe = /^[ \t]*```[ \t]*([A-Za-z0-9_+-]+)/gm;
+            let m;
+            while ((m = fenceRe.exec(markdown))) {
+                const lang = m[1].toLowerCase();
+                if (HLJS_SKIP_LANGS.has(lang) || hljs.getLanguage(lang)) continue;
+                files.add(HLJS_LANG_ALIAS[lang] || lang);
+            }
+            return Promise.all([...files].map(loadHljsLanguage));
+        }
+
+        function stripFrontMatter(text) {
+            const match = text.match(/^---\r?\n[\s\S]*?\r?\n(?:---|\.\.\.)\r?\n?/);
+            return match ? text.slice(match[0].length) : text;
+        }
+
+        function slugify(text, usedSlugs) {
+            let slug = String(text).trim().toLowerCase()
+                .replace(/[!"#%&'()*+,./:;<=>?@[\]^`{|}~]/g, '')
+                .replace(/\s+/g, '-');
+            if (!slug) slug = 'section';
+            let unique = slug, i = 1;
+            while (usedSlugs.has(unique)) unique = `${slug}-${i++}`;
+            usedSlugs.add(unique);
+            return unique;
+        }
+
+        let currentState = 'home';
+        let currentFile = null;
+        let originalContent = '';
+        let sortOrder = localStorage.getItem('md-pro-sort') || 'desc';
+        
+        const defaultDB = { folders: [{ id: 'root', name: '默认文件夹', isOpen: true }], files: [] };
+
+        function getDB() {
+            let rawStr = localStorage.getItem('md-pro-db');
+            if (!rawStr) return JSON.parse(JSON.stringify(defaultDB));
+            try {
+                let parsed = JSON.parse(rawStr);
+                if (Array.isArray(parsed)) {
+                    let migratedDB = JSON.parse(JSON.stringify(defaultDB));
+                    parsed.forEach(f => { f.folderId = 'root'; migratedDB.files.push(f); });
+                    localStorage.setItem('md-pro-db', JSON.stringify(migratedDB));
+                    return migratedDB;
+                }
+                return parsed;
+            } catch (e) { return JSON.parse(JSON.stringify(defaultDB)); }
+        }
+
+        function saveDB(db) { localStorage.setItem('md-pro-db', JSON.stringify(db)); renderDrawer(); }
+
+        const vHome = document.getElementById('view-home');
+        const vRead = document.getElementById('view-read');
+        const vEdit = document.getElementById('view-edit');
+        
+        const headerUI = {
+            btnHamburger: document.getElementById('btn-hamburger'), btnBack: document.getElementById('btn-back'),
+            btnTheme: document.getElementById('btn-theme'), btnHomeSample: document.getElementById('btn-home-sample'),
+            btnReadCopy: document.getElementById('btn-read-copy'), btnReadEdit: document.getElementById('btn-read-edit'),
+            btnReadMore: document.getElementById('btn-read-more'), btnEditSave: document.getElementById('btn-edit-save'),
+            btnEditCancel: document.getElementById('btn-edit-cancel'), btnEditReset: document.getElementById('btn-edit-reset'),
+            btnEditMore: document.getElementById('btn-edit-more'), 
+            headerLogo: document.getElementById('header-logo'), headerTitle: document.getElementById('header-title')
+        };
+        const overlay = document.getElementById('overlay'); const drawer = document.getElementById('drawer');
+        const actionMenu = document.getElementById('action-menu'); const actionMenuItems = document.getElementById('action-menu-items');
+        const actionMenuOverlay = document.getElementById('action-menu-overlay');
+        const titleTooltip = document.getElementById('title-tooltip');
+        
+        const tocSidebar = document.getElementById('toc-sidebar'); const tocContent = document.getElementById('toc-content');
+        const btnFabToc = document.getElementById('btn-fab-toc'); const tocOverlay = document.getElementById('toc-overlay');
+        const readerContent = document.getElementById('reader-content'); const editorTextarea = document.getElementById('editor-textarea');
+        const editorPreview = document.getElementById('editor-preview');
+        const btnSort = document.getElementById('btn-sort');
+
+        async function switchState(newState) {
+            currentState = newState;
+            const isMobile = window.innerWidth < 768; 
+            
+            vHome.classList.add('hidden'); vRead.classList.add('hidden'); vEdit.classList.add('hidden');
+            btnFabToc.classList.add('hidden'); 
+            Object.values(headerUI).forEach(el => { if(el && el.id !== 'btn-hamburger') el.classList.add('hidden'); });
+            if (newState === 'home') {
+                vHome.classList.remove('hidden'); headerUI.headerLogo.classList.remove('hidden');
+                headerUI.btnHomeSample.classList.remove('hidden'); headerUI.btnTheme.classList.remove('hidden'); 
+                tocSidebar.classList.add('collapsed');
+            } else if (newState === 'read') {
+                vRead.classList.remove('hidden'); headerUI.btnBack.classList.remove('hidden');
+                headerUI.headerTitle.classList.remove('hidden'); headerUI.headerTitle.innerText = currentFile.title;
+                if(isMobile) {
+                    headerUI.btnReadMore.classList.remove('hidden'); btnFabToc.classList.remove('hidden'); 
+                } else {
+                    headerUI.btnReadCopy.classList.remove('hidden'); headerUI.btnReadEdit.classList.remove('hidden'); headerUI.btnTheme.classList.remove('hidden'); 
+                }
+                await renderMarkdown(currentFile.content, readerContent);
+                generateTOC(); if (!isMobile) tocSidebar.classList.remove('collapsed');
+            } else if (newState === 'edit') {
+                vEdit.classList.remove('hidden'); headerUI.headerTitle.classList.remove('hidden'); headerUI.headerTitle.innerText = "编辑: " + currentFile.title;
+                if(isMobile) {
+                    headerUI.btnBack.classList.remove('hidden'); headerUI.btnEditMore.classList.remove('hidden');
+                } else {
+                    headerUI.btnEditCancel.classList.remove('hidden'); headerUI.btnEditReset.classList.remove('hidden');
+                    headerUI.btnEditSave.classList.remove('hidden'); headerUI.btnTheme.classList.remove('hidden');
+                }
+                tocSidebar.classList.add('collapsed'); originalContent = currentFile.content;
+                editorTextarea.value = currentFile.content; await renderMarkdown(currentFile.content, editorPreview);
+            }
+        }
+
+        function showActionMenu(items) {
+            actionMenuItems.innerHTML = '';
+            items.forEach(item => {
+                const div = document.createElement('div');
+                div.className = `action-item ${item.danger ? 'danger' : ''} ${item.success ? 'success' : ''} ${item.isTitle ? 'title' : ''}`;
+                div.innerHTML = item.isTitle ? item.text : `<i class="${item.icon}"></i> ${item.text}`;
+                if (!item.isTitle) { div.onclick = () => { closeActionMenu(); item.action(); }; }
+                actionMenuItems.appendChild(div);
+            });
+            actionMenuOverlay.style.display = 'block'; setTimeout(() => { actionMenuOverlay.style.opacity = '1'; }, 10);
+            actionMenu.classList.add('show');
+        }
+
+        function closeActionMenu() { actionMenuOverlay.style.opacity = '0'; actionMenu.classList.remove('show'); setTimeout(() => { actionMenuOverlay.style.display = 'none'; }, 300); }
+        actionMenuOverlay.onclick = closeActionMenu;
+
+        btnSort.innerHTML = sortOrder === 'desc' ? '<i class="fas fa-sort-amount-down"></i>' : '<i class="fas fa-sort-amount-up"></i>';
+        btnSort.onclick = () => {
+            sortOrder = sortOrder === 'desc' ? 'asc' : 'desc'; localStorage.setItem('md-pro-sort', sortOrder);
+            btnSort.innerHTML = sortOrder === 'desc' ? '<i class="fas fa-sort-amount-down"></i>' : '<i class="fas fa-sort-amount-up"></i>'; renderDrawer();
+        };
+
+        function renderDrawer() {
+            let db = getDB();
+            const list = document.getElementById('history-list'); list.innerHTML = '';
+            const rootFolder = db.folders.find(f => f.id === 'root'); const customFolders = db.folders.filter(f => f.id !== 'root');
+            const pinnedFolders = customFolders.filter(f => f.isPinned); const unpinnedFolders = customFolders.filter(f => !f.isPinned);
+            const renderFolders = [rootFolder, ...pinnedFolders, ...unpinnedFolders].filter(Boolean);
+
+            renderFolders.forEach(folder => {
+                const group = document.createElement('div'); group.className = `folder-group ${folder.isOpen ? 'open' : ''}`; group.dataset.id = folder.id;
+                const header = document.createElement('div'); header.className = 'folder-header';
+                const pinIconStr = folder.isPinned ? 'fa-unlink' : 'fa-thumbtack';
+                const pinStyleStr = folder.isPinned ? 'style="color:var(--apple-blue)"' : '';
+                const pinBtnHtml = folder.id !== 'root' ? `<button class="folder-btn pin-folder-btn" title="${folder.isPinned ? '取消置顶' : '置顶'}"><i class="fas ${pinIconStr}" ${pinStyleStr}></i></button>` : '';
+
+                header.innerHTML = `
+                    <div class="folder-info">
+                        <i class="fas fa-chevron-right"></i> <i class="fas fa-folder folder-icon"></i> <span>${folder.name}</span>
+                    </div>
+                    <div class="folder-actions">
+                        <button class="folder-btn rename-btn" title="重命名"><i class="fas fa-pen"></i></button>
+                        ${pinBtnHtml}
+                        ${folder.id !== 'root' ? `<button class="folder-btn del-folder-btn" title="删除"><i class="fas fa-trash-alt"></i></button>` : ''}
+                    </div>
+                `;
+                header.querySelector('.folder-info').onclick = () => { folder.isOpen = !folder.isOpen; saveDB(db); };
+                header.querySelector('.rename-btn').onclick = (e) => { e.stopPropagation(); let newName = prompt("重命名文件夹：", folder.name); if (newName && newName.trim() !== '') { folder.name = newName.trim(); saveDB(db); } };
+                if (folder.id !== 'root') {
+                    header.querySelector('.pin-folder-btn').onclick = (e) => { e.stopPropagation(); folder.isPinned = !folder.isPinned; saveDB(db); };
+                    header.querySelector('.del-folder-btn').onclick = (e) => {
+                        e.stopPropagation(); const folderFiles = db.files.filter(f => f.folderId === folder.id);
+                        if (folderFiles.length > 0) {
+                            if (confirm(`文件夹 [${folder.name}] 中包含 ${folderFiles.length} 个文件。\n删除后这些文件将被移动到 [默认文件夹] 中，是否继续？`)) { db.files.forEach(f => { if(f.folderId === folder.id) f.folderId = 'root'; }); db.folders = db.folders.filter(f => f.id !== folder.id); saveDB(db); }
+                        } else { if (confirm(`确定删除空文件夹 [${folder.name}] 吗？`)) { db.folders = db.folders.filter(f => f.id !== folder.id); saveDB(db); } }
+                    };
+                    group.draggable = true;
+                    group.addEventListener('dragstart', (e) => { e.dataTransfer.setData('text/plain', folder.id); group.classList.add('dragging'); });
+                    group.addEventListener('dragend', () => { group.classList.remove('dragging'); document.querySelectorAll('.folder-group').forEach(el => el.classList.remove('drag-over')); });
+                    group.addEventListener('dragover', (e) => { e.preventDefault(); const draggingGroup = document.querySelector('.dragging'); if (draggingGroup && draggingGroup !== group && draggingGroup.dataset.id !== 'root') { group.classList.add('drag-over'); } });
+                    group.addEventListener('dragleave', () => { group.classList.remove('drag-over'); });
+                    group.addEventListener('drop', (e) => {
+                        e.preventDefault(); group.classList.remove('drag-over'); const draggedId = e.dataTransfer.getData('text/plain');
+                        if (!draggedId || draggedId === folder.id || draggedId === 'root') return;
+                        let draggedIndex = db.folders.findIndex(f => f.id === draggedId); let targetIndex = db.folders.findIndex(f => f.id === folder.id);
+                        if (draggedIndex > -1 && targetIndex > -1) { const [draggedFolder] = db.folders.splice(draggedIndex, 1); db.folders.splice(targetIndex, 0, draggedFolder); saveDB(db); }
+                    });
+                }
+
+                const filesContainer = document.createElement('div'); filesContainer.className = 'folder-files';
+                let folderFiles = db.files.filter(f => f.folderId === folder.id);
+                folderFiles.sort((a, b) => {
+                    if (a.isPinned && !b.isPinned) return -1; if (!a.isPinned && b.isPinned) return 1;
+                    return sortOrder === 'desc' ? b.timestamp - a.timestamp : a.timestamp - b.timestamp;
+                });
+                if (folderFiles.length === 0) { filesContainer.innerHTML = `<div style="padding: 10px 16px 10px 36px; font-size:12px; color:var(--text-secondary);">空文件夹</div>`; }
+
+                folderFiles.forEach(file => {
+                    const item = document.createElement('div'); item.className = 'history-item';
+                    const pinIcon = file.isPinned ? `<i class="fas fa-thumbtack" style="color:var(--apple-blue); margin-right:6px; font-size:12px;"></i>` : '';
+                    item.innerHTML = `
+                        <div class="history-info">
+                            <span class="history-title">${pinIcon}${file.title}</span>
+                            <span class="history-date">${new Date(file.timestamp).toLocaleString()}</span>
+                        </div>
+                        <button class="history-more-btn"><i class="fas fa-ellipsis-h"></i></button>
+                    `;
+                    item.querySelector('.history-info').onclick = () => { currentFile = file; closeDrawer(); switchState('read'); };
+                    item.querySelector('.history-more-btn').onclick = (e) => {
+                        e.stopPropagation();
+                        showActionMenu([
+                            { text: `对 "${file.title}" 进行操作`, isTitle: true },
+                            { text: '重命名文档', icon: 'fas fa-pen', action: () => {
+                                let newTitle = prompt("重命名文档：", file.title);
+                                if (newTitle && newTitle.trim() !== '') { file.title = newTitle.trim(); saveDB(db); if (currentFile && currentFile.id === file.id) { currentFile.title = file.title; let headerTitleEl = document.getElementById('header-title'); if (headerTitleEl) { headerTitleEl.innerText = currentState === 'edit' ? "编辑: " + file.title : file.title; } } }
+                            }},
+                            { text: file.isPinned ? '取消置顶' : '置顶文档', icon: `fas ${file.isPinned ? 'fa-unlink' : 'fa-thumbtack'}`, action: () => { file.isPinned = !file.isPinned; saveDB(db); }},
+                            { text: '移动到...', icon: 'fas fa-exchange-alt', action: () => {
+                                let moveOptions = [{ text: '选择目标文件夹', isTitle: true }];
+                                db.folders.forEach(targetFolder => { if (targetFolder.id !== file.folderId) { moveOptions.push({ text: targetFolder.name, icon: 'fas fa-folder', action: () => { file.folderId = targetFolder.id; targetFolder.isOpen = true; saveDB(db); } }); } });
+                                setTimeout(() => showActionMenu(moveOptions), 350); 
+                            }},
+                            { text: '删除文档', icon: 'fas fa-trash-alt', danger: true, action: () => { if(confirm(`确定删除文档 "${file.title}" 吗？`)) { db.files = db.files.filter(f => f.id !== file.id); saveDB(db); if(currentFile && currentFile.id === file.id) { switchState('home'); if(window.innerWidth < 768) closeDrawer(); } } } }
+                        ]);
+                    };
+                    filesContainer.appendChild(item);
+                });
+                group.appendChild(header); group.appendChild(filesContainer); list.appendChild(group);
+            });
+        }
+
+        document.getElementById('btn-new-folder').onclick = () => { let name = prompt("请输入新文件夹名称："); if (name && name.trim() !== '') { let db = getDB(); db.folders.push({ id: 'folder_' + Date.now(), name: name.trim(), isOpen: true, isPinned: false }); saveDB(db); } };
+        let tooltipTimer;
+        headerUI.headerTitle.onclick = () => { if (!currentFile) return; if (titleTooltip.classList.contains('show')) { titleTooltip.classList.remove('show'); clearTimeout(tooltipTimer); return; } titleTooltip.innerText = currentFile.title; titleTooltip.classList.add('show'); clearTimeout(tooltipTimer); tooltipTimer = setTimeout(() => { titleTooltip.classList.remove('show'); }, 3000); };
+        titleTooltip.onclick = () => titleTooltip.classList.remove('show');
+        headerUI.btnReadMore.onclick = () => { const isDark = document.body.getAttribute('data-theme') === 'dark'; showActionMenu([ { text: '编辑文档', icon: 'fas fa-edit', action: () => switchState('edit') }, { text: '复制全文', icon: 'fas fa-copy', action: () => copyContent(null) }, { text: isDark ? '浅色模式' : '深色模式', icon: isDark ? 'fas fa-sun' : 'fas fa-moon', action: () => toggleTheme() }, { text: '返回主页', icon: 'fas fa-home', action: () => switchState('home'), danger: true } ]); };
+        headerUI.btnEditMore.onclick = () => { const isDark = document.body.getAttribute('data-theme') === 'dark'; showActionMenu([ { text: '保存修改', icon: 'fas fa-save', action: () => saveEdit(), success: true }, { text: '重置内容', icon: 'fas fa-undo', action: () => resetEdit() }, { text: isDark ? '浅色模式' : '深色模式', icon: isDark ? 'fas fa-sun' : 'fas fa-moon', action: () => toggleTheme() }, { text: '放弃修改', icon: 'fas fa-times', action: () => cancelEdit(), danger: true } ]); };
+
+        const openDrawer = () => { overlay.style.display = 'block'; setTimeout(() => overlay.style.opacity = '1', 10); drawer.style.transform = 'translateX(0)'; };
+        const closeDrawer = () => { overlay.style.opacity = '0'; drawer.style.transform = 'translateX(-100%)'; setTimeout(() => overlay.style.display = 'none', 300); };
+        headerUI.btnHamburger.onclick = openDrawer; overlay.onclick = closeDrawer;
+        
+        let touchStartX = 0;
+        document.addEventListener('touchstart', (e) => { touchStartX = e.changedTouches[0].screenX; }, { passive: true });
+        document.addEventListener('touchend', (e) => { if (window.innerWidth >= 768) return; let touchEndX = e.changedTouches[0].screenX; if (touchStartX < 40 && touchEndX - touchStartX > 50) { openDrawer(); } if (overlay.style.display === 'block' && touchStartX - touchEndX > 50) { closeDrawer(); } }, { passive: true });
+        btnFabToc.onclick = () => { tocOverlay.style.display = 'block'; setTimeout(() => tocOverlay.style.opacity = '1', 10); tocSidebar.classList.add('mobile-open'); };
+        tocOverlay.onclick = () => { tocOverlay.style.opacity = '0'; tocSidebar.classList.remove('mobile-open'); setTimeout(() => tocOverlay.style.display = 'none', 300); };
+        headerUI.btnBack.onclick = () => { if(currentState === 'edit') cancelEdit(); else switchState('home'); };
+        headerUI.headerLogo.onclick = () => switchState('home'); headerUI.btnReadEdit.onclick = () => switchState('edit');
+        headerUI.btnReadCopy.onclick = () => copyContent(headerUI.btnReadCopy);
+        headerUI.btnEditSave.onclick = saveEdit; headerUI.btnEditCancel.onclick = cancelEdit; headerUI.btnEditReset.onclick = resetEdit;
+
+        function saveToCurrentFolder(fileParams) { let db = getDB(); let newFile = { ...fileParams, timestamp: Date.now(), isPinned: false, folderId: 'root' }; const idx = db.files.findIndex(f => f.id === newFile.id); if (idx > -1) { newFile.folderId = db.files[idx].folderId; newFile.isPinned = db.files[idx].isPinned; db.files[idx] = newFile; } else { db.files.unshift(newFile); } saveDB(db); }
+        function saveEdit() { currentFile.content = editorTextarea.value; saveToCurrentFolder(currentFile); switchState('read'); }
+        function cancelEdit() { if(editorTextarea.value === originalContent || confirm("放弃修改？")) switchState('read'); }
+        function resetEdit() { if(confirm("恢复到未修改前？")) { editorTextarea.value = originalContent; renderMarkdown(originalContent, editorPreview); } }
+        function copyContent(btnRef) { navigator.clipboard.writeText(currentFile.content).then(() => { if(btnRef) { btnRef.innerHTML = '<i class="fas fa-check"></i>'; setTimeout(() => btnRef.innerHTML = '<i class="fas fa-copy"></i>', 2000); } else alert("✅ 复制成功"); }); }
+
+        function processFileObj(file) { if (!file) return; const title = file.name.replace(/\.[^/.]+$/, ""); const reader = new FileReader(); reader.onload = ev => { currentFile = { id: Date.now().toString(), title, content: ev.target.result }; saveToCurrentFolder(currentFile); switchState('read'); closeDrawer(); }; reader.readAsText(file); }
+        function handleFile(e) { processFileObj(e.target.files[0]); if (e.target) e.target.value = ''; }
+        document.getElementById('file-upload-home').onchange = handleFile; document.getElementById('file-upload-drawer').onchange = handleFile;
+        document.addEventListener('dragover', (e) => { e.preventDefault(); });
+        document.addEventListener('drop', (e) => { e.preventDefault(); if (e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files.length > 0) { processFileObj(e.dataTransfer.files[0]); } });
+
+        async function renderMarkdown(text, target) {
+            const body = stripFrontMatter(text);
+            await ensureCodeLanguagesLoaded(body);
+            target.innerHTML = marked.parse(body);
+
+            // 触发 MathJax 渲染
+            if (window.MathJax && window.MathJax.typesetPromise) {
+                MathJax.typesetClear([target]);
+                MathJax.typesetPromise([target]).catch((err) => console.error('MathJax 渲染报错:', err));
+            }
+
+            const usedSlugs = new Set();
+            target.querySelectorAll('h1, h2, h3, h4').forEach((heading) => { heading.id = slugify(heading.textContent, usedSlugs); });
+            
+            target.querySelectorAll('pre code').forEach((block) => {
+                const pre = block.parentNode; if (pre.parentNode.classList.contains('code-block-wrapper')) return;
+                const copyBtn = document.createElement('button'); copyBtn.className = 'copy-code-btn'; copyBtn.innerHTML = '<i class="fas fa-copy"></i>';
+                copyBtn.onclick = () => { navigator.clipboard.writeText(block.textContent).then(() => { copyBtn.innerHTML = '<i class="fas fa-check"></i>'; setTimeout(() => copyBtn.innerHTML = '<i class="fas fa-copy"></i>', 2000); }); };
+                const wrapper = document.createElement('div'); wrapper.className = 'code-block-wrapper'; pre.parentNode.insertBefore(wrapper, pre); wrapper.appendChild(pre); wrapper.appendChild(copyBtn);
+            });
+            
+            const mermaidBlocks = target.querySelectorAll('pre code.language-mermaid');
+            if (mermaidBlocks.length > 0) {
+                mermaidBlocks.forEach((block) => {
+                    const pre = block.parentNode; const codeWrapper = pre.parentNode; const wrapper = document.createElement('div'); wrapper.className = 'mermaid-wrapper';
+                    const graph = document.createElement('div'); graph.className = 'mermaid'; graph.textContent = block.textContent; wrapper.appendChild(graph);
+                    const copyBtn = codeWrapper.querySelector('.copy-code-btn'); if (copyBtn) wrapper.appendChild(copyBtn); codeWrapper.replaceWith(wrapper);
+                });
+                mermaid.initialize({ startOnLoad: false, theme: document.body.getAttribute('data-theme') === 'dark' ? 'dark' : 'default' });
+                await mermaid.run({ nodes: target.querySelectorAll('.mermaid') });
+            }
+        }
+        
+        function generateTOC() {
+            tocContent.innerHTML = ''; const headings = readerContent.querySelectorAll('h1, h2, h3, h4'); if(headings.length === 0) return tocContent.innerHTML = '<div style="padding:20px;color:#888;">暂无目录</div>';
+            headings.forEach(h => {
+                const link = document.createElement('a'); link.href = `#${h.id}`; link.className = `toc-link toc-${h.tagName.toLowerCase()}`; link.innerText = h.innerText;
+                link.onclick = (e) => { e.preventDefault(); h.scrollIntoView({ behavior: 'smooth', block: 'start' }); if (window.innerWidth < 768) tocOverlay.onclick(); };
+                tocContent.appendChild(link);
+            });
+        }
+        
+        editorTextarea.addEventListener('input', e => renderMarkdown(e.target.value, editorPreview));
+        document.getElementById('menu-new').onclick = () => { const title = prompt("新文档名称：", "未命名文档"); if (title) { currentFile = { id: Date.now().toString(), title, content: `# ${title}\n\n` }; saveToCurrentFolder(currentFile); closeDrawer(); switchState('edit'); } };
+        
+        // 示例按钮：可以直接验证你截图里的公式了！
+        headerUI.btnHomeSample.onclick = () => { 
+            currentFile = { id: 'sample', title: '示例：概率公式测试', content: '这是一些概率论公式的测试：\n\n1. 单选选项：则 $P\\{X^2 = 1\\} = $ （B）\n2. 分布函数：则 $P\\{X \\leq 2\\} = $ （B）\n3. 二维分布：则 $P\\{6 < X \\leq 8, 5 < Y \\leq 10\\} = $ ( A )' }; 
+            saveToCurrentFolder(currentFile); 
+            switchState('read'); 
+        };
+        
+        function toggleTheme() { setTheme(document.body.getAttribute('data-theme') !== 'dark'); }
+        headerUI.btnTheme.onclick = toggleTheme; window.onresize = () => switchState(currentState);
+
+        function setTheme(isDark) {
+            document.body.setAttribute('data-theme', isDark ? 'dark' : 'light'); headerUI.btnTheme.innerHTML = isDark ? '<i class="fas fa-sun"></i>' : '<i class="fas fa-moon"></i>';
+            localStorage.setItem('md-theme', isDark ? 'dark' : 'light'); document.getElementById('md-style').href = `https://cdnjs.cloudflare.com/ajax/libs/github-markdown-css/5.5.0/github-markdown-${isDark ? 'dark' : 'light'}.min.css`;
+            document.getElementById('hljs-style').href = `https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/${isDark ? 'github-dark' : 'github'}.min.css`;
+        }
+        const savedTheme = localStorage.getItem('md-theme'); setTheme(savedTheme === 'dark' || (!savedTheme && window.matchMedia('(prefers-color-scheme: dark)').matches));
+        
+        renderDrawer(); switchState('home');
+    </script>
+</body>
+</html>
