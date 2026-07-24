@@ -12,6 +12,8 @@
     <script src="https://cdn.jsdelivr.net/npm/mermaid@10.9.3/dist/mermaid.min.js"></script>
 
     <script>
+        // 只放配置，不在这里直接加载 tex-chtml.js 本体——MathJax 体积不小，
+        // 真正的脚本改成"文档里检测到 $ 数学语法才按需加载"，纯文字/代码笔记打开更快
         window.MathJax = {
             tex: {
                 inlineMath: [['\\(', '\\)']],
@@ -25,7 +27,6 @@
             startup: { typeset: false }
         };
     </script>
-    <script id="MathJax-script" async src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-chtml.js"></script>
 
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
     <link id="hljs-style" rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/github.min.css">
@@ -122,6 +123,9 @@
         /* MathJax 保护层样式 */
         .math-display { display: block; margin: 1em 0; overflow-x: auto; }
         .math-inline { display: inline-block; }
+        /* MathJax 是异步渲染的：脚本加载+排版需要时间，这段时间内先把原始的 \(...\) 源码藏起来，
+           避免用户先看到一闪而过的 LaTeX 源文本，等 typesetPromise 完成后由 JS 去掉这个 class 再显现 */
+        .markdown-body.math-pending .math-inline, .markdown-body.math-pending .math-display { visibility: hidden; }
 
         .view-edit { display: flex; flex-direction: column; overflow: hidden; }
         .edit-pane, .preview-pane { flex: 1; overflow-y: auto; -webkit-overflow-scrolling: touch; padding: 20px; padding-bottom: calc(20px + env(safe-area-inset-bottom)); }
@@ -291,11 +295,17 @@
             tokenizer(src, tokens) {
                 const blockRule = /^\$\$([\s\S]+?)\$\$/;
                 // 去除了原本严苛的 (?!\s) 和 (?<!\s)，允许公式内部前后带空格
-                const inlineRule = /^\$((?:\\.|[^\$\n])+?)\$/; 
+                const inlineRule = /^\$((?:\\.|[^\$\n])+?)\$/;
                 let match;
                 if (match = blockRule.exec(src)) {
                     return { type: 'math', raw: match[0], text: match[1], displayMode: true };
                 } else if (match = inlineRule.exec(src)) {
+                    // 单行公式里放宽空格限制后，容易把普通的金额写法（"花了 $5 和 $10"）误判成公式。
+                    // 这里只挡住最常见、最容易误伤的情况——括起来的内容是纯数字/金额（比如 $5$、$19.99$），
+                    // 遇到这种就交还给 marked 当普通文本处理。注意：这只覆盖"单独一对$夹纯数字"这种简单情况，
+                    // 像"花了 $5 和 $10"这种一句话里有两个不相关$的情况，本身就有歧义，这里没有、也很难完全解决。
+                    const trimmed = match[1].trim();
+                    if (/^\d[\d,]*(\.\d{1,2})?$/.test(trimmed)) return false;
                     return { type: 'math', raw: match[0], text: match[1], displayMode: false };
                 }
                 return false;
@@ -320,10 +330,10 @@
                 }
             }),
             { extensions: [mathExtension] },
-            { hooks: { postprocess: (html) => DOMPurify.sanitize(html, {
-                ADD_ATTR: ['style', 'aria-hidden', 'data-token', 'data-value', 'class'],
-                FORCE_BODY: false
-            }) } }
+            // aria-hidden/data-token/data-value 这几个属性在整套代码里都没有实际生成的地方
+            // （MathJax 是在这层 sanitize 完成之后，直接对已插入的 DOM 做二次替换渲染的，根本不经过这里），
+            // 之前留着的这几个白名单是没验证过的冗余配置，清理掉，跟 markdown-reader 保持一致
+            { hooks: { postprocess: (html) => DOMPurify.sanitize(html, { ADD_ATTR: ['style'] }) } }
         );
 
         mermaid.initialize({ startOnLoad: false, theme: document.body.getAttribute('data-theme') === 'dark' ? 'dark' : 'default' });
@@ -358,6 +368,31 @@
                 files.add(HLJS_LANG_ALIAS[lang] || lang);
             }
             return Promise.all([...files].map(loadHljsLanguage));
+        }
+
+        // ================= MathJax 按需加载 =================
+        // 和上面 hljs 按需加载语言包同一个思路：文档里没有 $ 数学语法就完全不用去拉这个不小的库，
+        // 纯文字/代码笔记打开会更快。只在真正遇到公式的文档里才动态插入脚本标签。
+        let mathJaxLoadPromise = null;
+        function docHasMath(markdown) {
+            return /\$\$[\s\S]+?\$\$/.test(markdown) || /\$(?:\\.|[^\$\n])+?\$/.test(markdown);
+        }
+        function ensureMathJaxLoaded() {
+            if (window.MathJax && window.MathJax.typesetPromise) return Promise.resolve();
+            if (mathJaxLoadPromise) return mathJaxLoadPromise;
+            mathJaxLoadPromise = new Promise((resolve) => {
+                const script = document.createElement('script');
+                script.id = 'MathJax-script';
+                script.src = 'https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-chtml.js';
+                script.onload = () => {
+                    if (window.MathJax && window.MathJax.startup && window.MathJax.startup.promise) {
+                        window.MathJax.startup.promise.then(resolve);
+                    } else resolve();
+                };
+                script.onerror = resolve; // 加载失败就放弃渲染，公式退化显示为原始 \(...\) 文本
+                document.head.appendChild(script);
+            });
+            return mathJaxLoadPromise;
         }
 
         function stripFrontMatter(text) {
@@ -607,10 +642,17 @@
             await ensureCodeLanguagesLoaded(body);
             target.innerHTML = marked.parse(body);
 
-            // 触发 MathJax 渲染
-            if (window.MathJax && window.MathJax.typesetPromise) {
-                MathJax.typesetClear([target]);
-                MathJax.typesetPromise([target]).catch((err) => console.error('MathJax 渲染报错:', err));
+            // 触发 MathJax 渲染：先判断文档里有没有 $ 公式，没有就完全不加载 MathJax；
+            // 有的话，加载/排版这段异步时间里先用 math-pending 把原始 \(...\) 源码藏起来，
+            // 避免用户看到一闪而过的 LaTeX 源文本，排版完成后再显现
+            if (docHasMath(body)) {
+                target.classList.add('math-pending');
+                await ensureMathJaxLoaded();
+                if (window.MathJax && window.MathJax.typesetPromise) {
+                    MathJax.typesetClear([target]);
+                    await MathJax.typesetPromise([target]).catch((err) => console.error('MathJax 渲染报错:', err));
+                }
+                target.classList.remove('math-pending');
             }
 
             const usedSlugs = new Set();
