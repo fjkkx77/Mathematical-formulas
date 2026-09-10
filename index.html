@@ -81,7 +81,7 @@
 
         .logo-text { font-weight: 700; font-size: 1.1rem; color: var(--apple-blue); cursor: pointer; flex-shrink: 0; }
         
-        .file-title-display { font-weight: 600; font-size: 1rem; color: var(--text-main); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%; display: block; cursor: pointer; transition: opacity 0.2s; }
+        .file-title-display { font-weight: 600; font-size: 1rem; color: var(--text-main); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%; display: block; cursor: pointer; transition: opacity 0.2s; touch-action: manipulation; -webkit-user-select: none; user-select: none; }
         .file-title-display:active { opacity: 0.4; }
 
         .hidden { display: none !important; }
@@ -606,7 +606,26 @@
 
         document.getElementById('btn-new-folder').onclick = () => { let name = prompt("请输入新文件夹名称："); if (name && name.trim() !== '') { let db = getDB(); db.folders.push({ id: 'folder_' + Date.now(), name: name.trim(), isOpen: true, isPinned: false }); saveDB(db); } };
         let tooltipTimer;
-        headerUI.headerTitle.onclick = () => { if (!currentFile) return; if (titleTooltip.classList.contains('show')) { titleTooltip.classList.remove('show'); clearTimeout(tooltipTimer); return; } titleTooltip.innerText = currentFile.title; titleTooltip.classList.add('show'); clearTimeout(tooltipTimer); tooltipTimer = setTimeout(() => { titleTooltip.classList.remove('show'); }, 3000); };
+        const toggleTitleTooltip = () => { if (titleTooltip.classList.contains('show')) { titleTooltip.classList.remove('show'); clearTimeout(tooltipTimer); return; } titleTooltip.innerText = currentFile.title; titleTooltip.classList.add('show'); clearTimeout(tooltipTimer); tooltipTimer = setTimeout(() => { titleTooltip.classList.remove('show'); }, 3000); };
+        // 双击标题回到顶部（仅阅读视图）。窗口内的第二击算双击，窗口外照旧走 tooltip toggle。
+        // 双击时不撤销已弹出的 tooltip——"弹出后被瞬间抹掉"才是刺眼的那一闪，让它自然淡出就
+        // 只是一次正常显示，于是单击不需要任何淡入延迟（延迟期间画面毫无变化，点下去像没反应）。
+        // 停留时长按回顶动画取整，滚动停下时它也差不多淡完。
+        const TITLE_DBLCLICK_MS = 300, DBL_TOOLTIP_LINGER_MS = 900;
+        let titleClickTimer = null;
+        headerUI.headerTitle.onclick = () => {
+            if (!currentFile) return;
+            if (currentState !== 'read') { toggleTitleTooltip(); return; }   // 编辑模式行为完全不变
+            if (titleClickTimer) {                                           // 窗口内的第二击 → 双击
+                clearTimeout(titleClickTimer); titleClickTimer = null;
+                clearTimeout(tooltipTimer);
+                tooltipTimer = setTimeout(() => { titleTooltip.classList.remove('show'); }, DBL_TOOLTIP_LINGER_MS);
+                vRead.scrollTo({ top: 0, behavior: 'smooth' });              // 滚动容器是 #view-read，不是 window
+                return;
+            }
+            toggleTitleTooltip();                                            // 第一击照常，零延迟
+            titleClickTimer = setTimeout(() => { titleClickTimer = null; }, TITLE_DBLCLICK_MS);
+        };
         titleTooltip.onclick = () => titleTooltip.classList.remove('show');
         headerUI.btnReadMore.onclick = () => { const isDark = document.body.getAttribute('data-theme') === 'dark'; showActionMenu([ { text: '编辑文档', icon: 'fas fa-edit', action: () => switchState('edit') }, { text: '复制全文', icon: 'fas fa-copy', action: () => copyContent(null) }, { text: isDark ? '浅色模式' : '深色模式', icon: isDark ? 'fas fa-sun' : 'fas fa-moon', action: () => toggleTheme() }, { text: '返回主页', icon: 'fas fa-home', action: () => switchState('home'), danger: true } ]); };
         headerUI.btnEditMore.onclick = () => { const isDark = document.body.getAttribute('data-theme') === 'dark'; showActionMenu([ { text: '保存修改', icon: 'fas fa-save', action: () => saveEdit(), success: true }, { text: '重置内容', icon: 'fas fa-undo', action: () => resetEdit() }, { text: isDark ? '浅色模式' : '深色模式', icon: isDark ? 'fas fa-sun' : 'fas fa-moon', action: () => toggleTheme() }, { text: '放弃修改', icon: 'fas fa-times', action: () => cancelEdit(), danger: true } ]); };
