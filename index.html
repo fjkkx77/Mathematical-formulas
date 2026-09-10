@@ -300,12 +300,22 @@
                 if (match = blockRule.exec(src)) {
                     return { type: 'math', raw: match[0], text: match[1], displayMode: true };
                 } else if (match = inlineRule.exec(src)) {
-                    // 单行公式里放宽空格限制后，容易把普通的金额写法（"花了 $5 和 $10"）误判成公式。
-                    // 这里只挡住最常见、最容易误伤的情况——括起来的内容是纯数字/金额（比如 $5$、$19.99$），
-                    // 遇到这种就交还给 marked 当普通文本处理。注意：这只覆盖"单独一对$夹纯数字"这种简单情况，
-                    // 像"花了 $5 和 $10"这种一句话里有两个不相关$的情况，本身就有歧义，这里没有、也很难完全解决。
-                    const trimmed = match[1].trim();
-                    if (/^\d[\d,]*(\.\d{1,2})?$/.test(trimmed)) return false;
+                    // 放宽空格限制后，普通金额写法（"花了 $5 和 $10"）会被误配成公式。
+                    // 判据不能看"内容像不像数字"——$0$、$0.5$、$100$ 在数学文档里全是真公式。
+                    // 真正的区别是：金额里的 $ 是孤立的前缀符号，数学公式的 $ 是成对的；
+                    // 一旦发生误配对，被夹进这对 $ 里的必然是正文，而不是数学内容。下面两条抓的正是这个。
+                    const body = match[1];
+                    const rest = src.slice(match[0].length);
+                    // 花括号里的内容（\text{其他}、\frac{甲}{乙}）是合法的公式内容，
+                    // 由内向外逐层剥掉之后再判断，免得误伤带中文参数的命令
+                    let bare = body;
+                    for (let i = 0; i < 5 && /\{[^{}]*\}/.test(bare); i++) bare = bare.replace(/\{[^{}]*\}/g, '');
+                    // ① 花括号之外还夹着中文/全角标点 → 这对 $ 跨过了正文（"$5 和 $"），不是公式
+                    if (/[一-鿿　-〿＀-￯]/.test(bare)) return false;
+                    // ② 不含任何 LaTeX 命令，且闭合的 $ 后面紧跟数字 → 那个 $ 其实是下一处金额的起始
+                    //    （"spent $5 and $10" 会被配成 "$5 and $"，其后紧跟 10）。含 \cup 这类命令的
+                    //    基本可断定是公式，不适用此条，免得误伤 "$\frac{1}{2}$2 倍" 这种写法。
+                    if (!/\\[a-zA-Z]/.test(body) && /^\d/.test(rest)) return false;
                     return { type: 'math', raw: match[0], text: match[1], displayMode: false };
                 }
                 return false;
