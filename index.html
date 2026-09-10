@@ -41,12 +41,14 @@
             --bg-base: #F2F2F7; --bg-surface: #FFFFFF; --text-main: #000000; --text-secondary: #6C6C70;
             --border-color: #E5E5EA; --header-bg: rgba(255, 255, 255, 0.85); --sidebar-bg: #F8F8F8;
             --header-height: 55px;
+            --sync-highlight-bg: #fff59d;
         }
         
         [data-theme="dark"] {
             --apple-blue: #0A84FF; --apple-green: #30D158; --apple-red: #FF453A;
             --bg-base: #000000; --bg-surface: #1C1C1E; --text-main: #FFFFFF; --text-secondary: #EBEBF5;
             --border-color: #38383A; --header-bg: rgba(28, 28, 30, 0.85); --sidebar-bg: #151515;
+            --sync-highlight-bg: #6b5b00;
         }
         
         html, body { height: 100%; width: 100%; overflow: hidden; }
@@ -132,6 +134,12 @@
         .edit-pane { background: var(--bg-surface); border-bottom: 1px solid var(--border-color); }
         .preview-pane { background: var(--bg-base); }
         #editor-textarea { width: 100%; height: 100%; resize: none; border: none; outline: none; background: transparent; color: var(--text-main); font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Microsoft YaHei", sans-serif; font-size: 16px; line-height: 1.6; padding: 5px; }
+
+        /* 编辑光标定位同步：光标移到源码某一行时，预览区对应的那一块短暂闪一下，
+           提示"就是这一块"。高亮目标不一定是 editor-preview 的直接子元素——粒度细
+           化之后也可能是列表项 li 或表格行 tr，所以不能用 ">" 直接子选择器。 */
+        #editor-preview .sync-highlight { animation: sync-highlight-flash 0.9s ease-out; border-radius: 6px; }
+        @keyframes sync-highlight-flash { from { background: var(--sync-highlight-bg); } to { background: transparent; } }
 
         @media (min-width: 768px) { .view-edit { flex-direction: row; } .edit-pane { border-bottom: none; border-right: 1px solid var(--border-color); } }
         @media (max-width: 767px) { 
@@ -722,6 +730,80 @@
             await ensureCodeLanguagesLoaded(body);
             target.innerHTML = marked.parse(body);
 
+            // ===== 编辑光标定位同步：给渲染结果标上源码行号 =====
+            // 给每个块标一个 data-start-line（它在源码里的起始行号），供
+            // scrollPreviewToCursor() 反查"光标这一行对应预览区哪一块"。
+            //
+            // 【安全约束，不可改写】这里刻意不用 marked.lexer()+marked.parser([token])
+            // 逐块单独渲染：marked.use() 注册的 postprocess 钩子（DOMPurify.sanitize，
+            // 防止 .md 里夹带的 <script>/onerror 被执行）只在 marked.parse() 这条完整
+            // 流水线上生效，单独调用 marked.parser() 不会触发它（实测验证过：同一段带
+            // onerror 的内容，marked.parse() 正确剥离，逐块渲染会原样漏过去）。
+            // 所以上面那行已经过完整流水线（含净化）的 innerHTML 一个字都不动，只用
+            // marked.lexer() 做纯分词（不产出任何 HTML，只为拿到每块的起始行号），
+            // 再按顺序往现成 DOM 上加几个数字属性——不重新生成 HTML，不引入 XSS 风险。
+            //
+            // 【本站特有，与 markdown-reader 的写法不同】lexer 绝不能传第二个参数。
+            // 传 { gfm, breaks } 会覆盖全局配置、丢掉 marked.use() 注册的 extensions，
+            // 于是 mathBlock（$$ 跨空行）会被拆成 3 个 paragraph token，token 与 DOM
+            // 子元素的一一对应关系断裂、打标整体错位，而且不报任何错。实测：传参
+            // 12 个 token vs 10 个 DOM 子元素，不传参 10 vs 10。
+            const lineTrackingTokens = marked.lexer(body).filter(t => t.type !== 'space');
+            const startLineAt = (offset) => (body.slice(0, offset).match(/\n/g) || []).length;
+
+            // 按 raw 在源码里的出现位置定位每个 token。cursor 是"从哪里开始往后找"的
+            // 游标，必须严格随文档顺序推进——否则内容完全相同的两行（题目整理这类高度
+            // 重复的文档里很常见）会被一起匹配到最前面那一处，行号全部算错。
+            function tagList(items, listEl, listOffset) {
+                let cursor = listOffset;
+                items.forEach((item, j) => {
+                    const raw = item.raw || '';
+                    let idx = raw ? body.indexOf(raw, cursor) : cursor;
+                    if (idx === -1) idx = cursor;
+                    const li = listEl.children[j];
+                    if (li) {
+                        li.dataset.startLine = startLineAt(idx);
+                        const nestedEls = Array.from(li.children).filter(c => c.tagName === 'UL' || c.tagName === 'OL');
+                        (item.tokens || []).filter(t => t.type === 'list').forEach((nt, k) => {
+                            if (nestedEls[k] && Array.isArray(nt.items)) tagList(nt.items, nestedEls[k], idx);
+                        });
+                    }
+                    cursor = idx + raw.length;
+                });
+            }
+
+            function tagTable(tableEl, tableOffset) {
+                // GFM 表格源码结构固定：第1行表头、第2行分隔线、之后每行一条数据，
+                // 行号直接推算即可，不去 body 里搜（单元格内容重复率高，搜容易错位）。
+                const base = startLineAt(tableOffset);
+                const headRow = tableEl.querySelector('thead tr');
+                if (headRow) headRow.dataset.startLine = base;
+                tableEl.querySelectorAll('tbody tr').forEach((tr, i) => { tr.dataset.startLine = base + 2 + i; });
+            }
+
+            let searchFrom = 0;
+            lineTrackingTokens.forEach((token, i) => {
+                const raw = token.raw || '';
+                let idx = raw ? body.indexOf(raw, searchFrom) : searchFrom;
+                if (idx === -1) idx = searchFrom;
+                const startLine = startLineAt(idx);
+                const el = target.children[i];
+                if (el) {
+                    el.dataset.startLine = startLine;
+                    // 记下这块占到第几行。像代码块这种内部再没有更细元素可选的整块内容
+                    // （60 行代码块就渲染成一个 <pre>），只有知道行号区间，才能按"光标在
+                    // 这块的第几行"滚到块内部对应位置，而不是一律滚到块开头。
+                    el.dataset.endLine = startLine + Math.max(0, raw.replace(/\n+$/, '').split('\n').length - 1);
+                    if (token.type === 'list' && Array.isArray(token.items)) tagList(token.items, el, idx);
+                    else if (token.type === 'table') tagTable(el, idx);
+                }
+                searchFrom = idx + raw.length;
+            });
+            // 打标必须在下面这些改动 DOM 的步骤之前完成：MathJax 排版、代码块包进
+            // .code-block-wrapper、mermaid 替换节点，都会打乱 target.children 的顺序
+            // 或层级。属性打在元素自身上，元素之后被移动也不影响——scrollPreviewToCursor
+            // 用 querySelectorAll('[data-start-line]') 取，不依赖它们还是不是直接子元素。
+
             // 触发 MathJax 渲染：先判断文档里有没有 $ 公式，没有就完全不加载 MathJax；
             // 有的话，加载/排版这段异步时间里先用 math-pending 把原始 \(...\) 源码藏起来，
             // 避免用户看到一闪而过的 LaTeX 源文本，排版完成后再显现
@@ -766,7 +848,59 @@
             });
         }
         
-        editorTextarea.addEventListener('input', e => renderMarkdown(e.target.value, editorPreview));
+        function flashHighlight(el) {
+            if (!el) return;
+            el.classList.remove('sync-highlight');
+            void el.offsetWidth; // 强制回流，让重新加上 class 能重播动画
+            el.classList.add('sync-highlight');
+            setTimeout(() => el.classList.remove('sync-highlight'), 900);
+        }
+
+        function scrollPreviewToCursor() {
+            // 用 querySelectorAll 而不是只看 editorPreview.children：列表项、嵌套列表项、
+            // 表格行也各自带了 data-start-line，只收顶层子元素的话粒度会退回"一个列表算
+            // 一个点"。另外代码块的 <pre> 被移进 .code-block-wrapper 后就不再是直接子元素，
+            // 用 children 的话在代码块里点会落空到上一个标题上。
+            // querySelectorAll 返回文档顺序，而文档顺序下 data-start-line 单调不减
+            // （父元素起始行 <= 它第一个子元素起始行），所以下面"取最后一个 <= 光标行"
+            // 配合 break 提前退出依然成立。
+            const blocks = Array.from(editorPreview.querySelectorAll('[data-start-line]'));
+            if (blocks.length === 0) return;
+            const cursorLine = (editorTextarea.value.slice(0, editorTextarea.selectionStart).match(/\n/g) || []).length;
+            let target = blocks[0];
+            for (const block of blocks) {
+                if (Number(block.dataset.startLine) <= cursorLine) target = block; else break;
+            }
+            // 不用 target.scrollIntoView({block:'center'})：它会连带滚动所有可滚动祖先；
+            // 目标比可视区高时"居中"会把开头顶出屏幕；而且 center 也不是想要的落点——
+            // 光标那一行应当顶到最上面。所以直接算 .preview-pane（真正带 overflow-y:auto
+            // 的那层）该滚多少，统一顶部对齐。
+            const TOP_GAP = 12;
+            const pane = editorPreview.closest('.preview-pane') || editorPreview.parentElement;
+            if (!pane) return;
+            const paneRect = pane.getBoundingClientRect();
+            const rect = target.getBoundingClientRect();
+            // 目标比可视区还高时（长代码块这种块内没有更细元素可选的情况），不能直接拿
+            // 块顶边对齐——那样在 60 行的代码块里点第 50 行，看到的还是第 1 行，等于没定位。
+            // 用 data-end-line 按"光标在这块的第几行"在块内插值，把那一行本身顶到最上面。
+            let anchorTop = rect.top;
+            if (rect.height >= paneRect.height) {
+                const start = Number(target.dataset.startLine);
+                const end = Number(target.dataset.endLine);
+                const span = Number.isFinite(end) && end > start ? end - start : 0;
+                const ratio = span > 0 ? Math.min(1, Math.max(0, (cursorLine - start) / span)) : 0;
+                anchorTop = rect.top + ratio * rect.height;
+            }
+            pane.scrollTop += anchorTop - paneRect.top - TOP_GAP;
+            flashHighlight(target);
+        }
+
+        const CURSOR_MOVE_KEYS = new Set(['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Home', 'End', 'PageUp', 'PageDown']);
+        editorTextarea.addEventListener('click', scrollPreviewToCursor);
+        editorTextarea.addEventListener('keyup', e => { if (CURSOR_MOVE_KEYS.has(e.key)) scrollPreviewToCursor(); });
+        // renderMarkdown 内部 await 了 MathJax 排版，所以这里 await 之后再定位，
+        // 量到的元素位置才是公式排版完成后的最终位置。
+        editorTextarea.addEventListener('input', async e => { await renderMarkdown(e.target.value, editorPreview); scrollPreviewToCursor(); });
         document.getElementById('menu-new').onclick = () => { const title = prompt("新文档名称：", "未命名文档"); if (title) { currentFile = { id: Date.now().toString(), title, content: `# ${title}\n\n` }; saveToCurrentFolder(currentFile); closeDrawer(); switchState('edit'); } };
         
         // 示例按钮：可以直接验证你截图里的公式了！
