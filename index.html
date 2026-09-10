@@ -287,18 +287,43 @@
     <script>
         const { markedHighlight } = globalThis.markedHighlight;
 
+        // 判断一段内容更像正文而不是数学：花括号里的东西（\text{其他}、\frac{甲}{乙}）
+        // 是合法的公式内容，由内向外逐层剥掉之后，外面若还剩中文/全角标点，那就是正文。
+        // 金额误配对（"$5 和 $"）和被转义的方括号（"\[这是方括号\]"）都靠这条识别。
+        const looksLikeProse = (s) => {
+            let bare = s;
+            for (let i = 0; i < 5 && /\{[^{}]*\}/.test(bare); i++) bare = bare.replace(/\{[^{}]*\}/g, '');
+            return /[一-鿿　-〿＀-￯]/.test(bare);
+        };
+
         // 【终极修复点】解除了前后空格的严格限制，完美兼容你的手写习惯
         const mathExtension = {
             name: 'math',
             level: 'inline',
-            start(src) { return src.indexOf('$'); },
+            // 除了 $，还要盯住 \( 和 \[ ——它们是 LaTeX 原生定界符，也是下面 MathJax
+            // 配置里唯一认得的两种；不在这里截住，markdown 会把反斜杠当转义吃掉。
+            start(src) {
+                const idx = [src.indexOf('$'), src.indexOf('\\('), src.indexOf('\\[')].filter(i => i >= 0);
+                return idx.length ? Math.min.apply(null, idx) : -1;
+            },
             tokenizer(src, tokens) {
                 const blockRule = /^\$\$([\s\S]+?)\$\$/;
                 // 去除了原本严苛的 (?!\s) 和 (?<!\s)，允许公式内部前后带空格
                 const inlineRule = /^\$((?:\\.|[^\$\n])+?)\$/;
+                // LaTeX 原生定界符。marked 会把 \( 解析成转义的左括号并吃掉反斜杠，
+                // 等 MathJax 来找定界符时已经没了，所以必须在这一层先接住。
+                const nativeBlockRule = /^\\\[([\s\S]+?)\\\]/;
+                const nativeInlineRule = /^\\\(([\s\S]+?)\\\)/;
                 let match;
                 if (match = blockRule.exec(src)) {
                     return { type: 'math', raw: match[0], text: match[1], displayMode: true };
+                } else if (match = nativeBlockRule.exec(src)) {
+                    // \[ 在 markdown 里本来是"转义的左方括号"，内容是正文时要还回去
+                    if (looksLikeProse(match[1])) return false;
+                    return { type: 'math', raw: match[0], text: match[1], displayMode: true };
+                } else if (match = nativeInlineRule.exec(src)) {
+                    if (looksLikeProse(match[1])) return false;
+                    return { type: 'math', raw: match[0], text: match[1], displayMode: false };
                 } else if (match = inlineRule.exec(src)) {
                     // 放宽空格限制后，普通金额写法（"花了 $5 和 $10"）会被误配成公式。
                     // 判据不能看"内容像不像数字"——$0$、$0.5$、$100$ 在数学文档里全是真公式。
@@ -306,12 +331,8 @@
                     // 一旦发生误配对，被夹进这对 $ 里的必然是正文，而不是数学内容。下面两条抓的正是这个。
                     const body = match[1];
                     const rest = src.slice(match[0].length);
-                    // 花括号里的内容（\text{其他}、\frac{甲}{乙}）是合法的公式内容，
-                    // 由内向外逐层剥掉之后再判断，免得误伤带中文参数的命令
-                    let bare = body;
-                    for (let i = 0; i < 5 && /\{[^{}]*\}/.test(bare); i++) bare = bare.replace(/\{[^{}]*\}/g, '');
                     // ① 花括号之外还夹着中文/全角标点 → 这对 $ 跨过了正文（"$5 和 $"），不是公式
-                    if (/[一-鿿　-〿＀-￯]/.test(bare)) return false;
+                    if (looksLikeProse(body)) return false;
                     // ② 不含任何 LaTeX 命令，且闭合的 $ 后面紧跟数字 → 那个 $ 其实是下一处金额的起始
                     //    （"spent $5 and $10" 会被配成 "$5 and $"，其后紧跟 10）。含 \cup 这类命令的
                     //    基本可断定是公式，不适用此条，免得误伤 "$\frac{1}{2}$2 倍" 这种写法。
@@ -385,7 +406,10 @@
         // 纯文字/代码笔记打开会更快。只在真正遇到公式的文档里才动态插入脚本标签。
         let mathJaxLoadPromise = null;
         function docHasMath(markdown) {
-            return /\$\$[\s\S]+?\$\$/.test(markdown) || /\$(?:\\.|[^\$\n])+?\$/.test(markdown);
+            // 四种定界符都要认。漏掉 \( \[ 会导致：marked 那层已经正确产出了公式 span，
+            // 但这里判定"没有数学"→ MathJax 根本不加载 → 公式原样显示，且毫无报错。
+            return /\$\$[\s\S]+?\$\$/.test(markdown) || /\$(?:\\.|[^\$\n])+?\$/.test(markdown)
+                || /\\\[[\s\S]+?\\\]/.test(markdown) || /\\\([\s\S]+?\\\)/.test(markdown);
         }
         function ensureMathJaxLoaded() {
             if (window.MathJax && window.MathJax.typesetPromise) return Promise.resolve();
