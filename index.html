@@ -351,6 +351,33 @@
             }
         };
 
+        // $$ 和公式之间隔了空行时，marked 会先按块级把它们切成不同段落，上面那个 inline
+        // 扩展就永远配不上对。这里补一个 block 级扩展，在块级切分之前接住。
+        // 【刻意收窄】只认"$$ 后面紧跟空行"这一种——那正是 inline 层处理不了的特征。
+        // 其余所有写法（$$E=mc^2$$、$$\n公式\n$$、段落中间的 $$）一律不碰，继续走原路径，
+        // 免得干扰 marked 的段落切分：block 扩展的 start() 会成为段落的截断点。
+        const mathBlockExtension = {
+            name: 'mathBlock',
+            level: 'block',
+            start(src) {
+                const m = /(?:^|\n)[ \t]*\$\$[ \t]*\n[ \t]*\n/.exec(src);
+                if (!m) return -1;
+                return m.index + (m[0][0] === '\n' ? 1 : 0);
+            },
+            tokenizer(src) {
+                const rule = /^\$\$[ \t]*\n(?:[ \t]*\n)+([\s\S]+?)\n(?:[ \t]*\n)*[ \t]*\$\$(?:\n|$)/;
+                const match = rule.exec(src);
+                if (!match) return false;
+                const text = match[1].trim();
+                if (!text) return false;
+                return { type: 'mathBlock', raw: match[0], text };
+            },
+            renderer(token) {
+                const safeText = token.text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+                return `<span class="math-display" style="display:block; margin: 1em 0;">\\[${safeText}\\]</span>`;
+            }
+        };
+
         marked.use(
             { gfm: true, breaks: true },
             markedHighlight({
@@ -360,7 +387,7 @@
                     return hljs.highlight(code, { language }).value;
                 }
             }),
-            { extensions: [mathExtension] },
+            { extensions: [mathBlockExtension, mathExtension] },
             // aria-hidden/data-token/data-value 这几个属性在整套代码里都没有实际生成的地方
             // （MathJax 是在这层 sanitize 完成之后，直接对已插入的 DOM 做二次替换渲染的，根本不经过这里），
             // 之前留着的这几个白名单是没验证过的冗余配置，清理掉，跟 markdown-reader 保持一致
