@@ -5,9 +5,12 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
     <title>Math Markdown Reader</title>
     
-    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+    <!-- 版本钉死（2026-10-07）：原来 marked / marked-highlight 都没写版本号。marked 从 v16 起不再提供
+         marked.min.js，CDN 是「回退到最后一个还有这个文件的版本」才给出 15.0.12 的，属于凑巧能用。
+         这里钉的就是当时实际在跑的版本（marked 15.0.12、marked-highlight 2.2.4），行为不变。 -->
+    <script src="https://cdn.jsdelivr.net/npm/marked@15.0.12/marked.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/marked-highlight/lib/index.umd.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/marked-highlight@2.2.4/lib/index.umd.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/dompurify@3.4.10/dist/purify.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/mermaid@10.9.3/dist/mermaid.min.js"></script>
 
@@ -121,6 +124,11 @@
         .markdown-body .mermaid-wrapper { position: relative; }
         .markdown-body .mermaid { overflow-x: auto; padding: 8px 0; }
         .markdown-body .mermaid svg { max-width: 100%; }
+        /* 编辑预览里每个顶层块前面的空行号标记（光标同步用，见 annotateBlocks）。零高度、不占位，
+           上下两块的外边距照样穿过它折叠。github-markdown-css 用 .markdown-body>:first-child 去掉第一块的
+           上边距，第一个子元素变成标记后要补到它后面那块上。 */
+        .kb-block-mark { display: block; height: 0; margin: 0; padding: 0; }
+        .markdown-body > .kb-block-mark:first-child + * { margin-top: 0 !important; }
 
         /* MathJax 保护层样式 */
         .math-display { display: block; margin: 1em 0; overflow-x: auto; }
@@ -386,6 +394,72 @@
             }
         };
 
+        // ================= 裸链接在中文标点处截断 =================
+        // GFM 规定裸链接一直延伸到空白或 < 为止，中文句子里网址后面没有空格——
+        // 「（来源：示例，https://example.com/a.html）。后面一句话。」会把「）。后面一句话。」整段吞进链接
+        //（2026-10-07 实测）。跟 markdown-reader / MyKnowledgeBase 同一套规则：在第一个中文/全角标点处截断
+        //（汉字本身不截，维基百科、百度百科的词条路径里就是汉字），截完再按 marked 原本的规则去掉末尾英文标点。
+        // URL_START_RE / BACKPEDAL_RE 跟 marked@15.0.12 源码里的 inline.url / _backpedal 逐字一致。
+        const URL_START_RE = /^((?:ftp|https?):\/\/|www\.)(?:[a-zA-Z0-9\-]+\.?)+[^\s<]*/i;
+        const CJK_PUNCT_RE = /[　-〿＀-￯‘’“”…—]/;
+        const BACKPEDAL_RE = /(?:[^?!.,:;*_'"~()&]+|\([^)]*\)|&(?![a-zA-Z0-9]+;$)|[?!.,:;*_'"~)]+(?!$))+/;
+        const cjkAutolinkTokenizer = {
+            url(src) {
+                const m = URL_START_RE.exec(src);
+                if (!m) return false; // 交还 marked 原本的规则（邮箱自动链接走那里）
+                let raw = m[0];
+                const cut = raw.search(CJK_PUNCT_RE);
+                if (cut !== -1) raw = raw.slice(0, cut);
+                let prev;
+                do { prev = raw; raw = (BACKPEDAL_RE.exec(raw) || [''])[0]; } while (prev !== raw);
+                if (!/^(?:(?:ftp|https?):\/\/|www\.)[a-zA-Z0-9\-]/i.test(raw)) return false;
+                // text 给原文、不自己转义：marked 15 的 text 渲染器会转义（预先转义的话 & 会变成 &amp;amp;）
+                return { type: 'link', raw, text: raw, href: /^www\./i.test(raw) ? 'http://' + raw : raw, tokens: [{ type: 'text', raw, text: raw }] };
+            }
+        };
+
+        // ================= 编辑预览的行号标记 =================
+        // 光标同步要知道预览里每一块对应源码第几行。原来是渲染完另外 marked.lexer() 一次、按
+        // 「第 i 个 token ↔ 第 i 个子元素」打标——HTML 注释（渲染成注释节点不是元素）、链接定义（不出元素）、
+        // 一段里并排几个 HTML 标签时这个对应关系都不成立，后面的定位整体错位（2026-10-07 实测：
+        // 文档开头有一条注释和一条链接定义，光标在「第25段」预览停在「第26段」）。
+        // 现在在 marked.parse 自己的 processAllTokens 钩子里，往每个顶层 token 前插一个空的
+        // <div class="kb-block-mark" data-start-line=…>。一块的范围 = 这个标记到下一个标记之间的元素，
+        // 渲染出几个元素都不影响对应关系。仍是完整的 marked.parse 流水线，postprocess 里的 DOMPurify 照常生效。
+        // 不再单独调 lexer，所以「lexer 不能传第二个参数、否则丢掉 mathBlock 扩展」那个坑也自然没了。
+        // 只有编辑预览需要标记，阅读视图不插（markBlocks 开关）。跟 markdown-reader 是同一套算法。
+        let markBlocks = false;
+        let markSrc = '';
+        let markBlocksOut = [];
+        const UNMARKED_TYPES = new Set(['space']);
+        function annotateBlocks(tokens) {
+            if (!markBlocks) return tokens;
+            const src = markSrc;
+            const original = tokens.slice();
+            // 原地改这个数组（tokens.links 等挂在数组对象上的东西要保住）
+            tokens.length = 0;
+            let from = 0, line = 0, lineOffset = 0;
+            const lineAt = (offset) => {
+                for (let i = lineOffset; i < offset; i++) if (src.charCodeAt(i) === 10) line++;
+                lineOffset = offset;
+                return line;
+            };
+            for (const token of original) {
+                const raw = token.raw || '';
+                if (UNMARKED_TYPES.has(token.type) || !raw) { tokens.push(token); continue; }
+                let idx = src.indexOf(raw, from);
+                if (idx === -1) idx = from;
+                const startLine = lineAt(idx);
+                const endLine = startLine + Math.max(0, raw.replace(/\n+$/, '').split('\n').length - 1);
+                const index = markBlocksOut.length;
+                markBlocksOut.push({ index, type: token.type, startLine, endLine, offset: idx, token });
+                tokens.push({ type: 'html', block: true, pre: false, raw: '', text: `<div class="kb-block-mark" data-block="${index}" data-start-line="${startLine}" data-end-line="${endLine}"></div>\n` });
+                tokens.push(token);
+                from = idx + raw.length;
+            }
+            return tokens;
+        }
+
         marked.use(
             { gfm: true, breaks: true },
             markedHighlight({
@@ -395,11 +469,17 @@
                     return hljs.highlight(code, { language }).value;
                 }
             }),
-            { extensions: [mathBlockExtension, mathExtension] },
+            { extensions: [mathBlockExtension, mathExtension], tokenizer: cjkAutolinkTokenizer },
             // aria-hidden/data-token/data-value 这几个属性在整套代码里都没有实际生成的地方
             // （MathJax 是在这层 sanitize 完成之后，直接对已插入的 DOM 做二次替换渲染的，根本不经过这里），
             // 之前留着的这几个白名单是没验证过的冗余配置，清理掉，跟 markdown-reader 保持一致
-            { hooks: { postprocess: (html) => DOMPurify.sanitize(html, { ADD_ATTR: ['style'] }) } }
+            {
+                hooks: {
+                    preprocess(markdown) { markSrc = String(markdown).replace(/\r\n|\r/g, '\n'); return markdown; },
+                    processAllTokens: annotateBlocks,
+                    postprocess: (html) => DOMPurify.sanitize(html, { ADD_ATTR: ['style'] })
+                }
+            }
         );
 
         mermaid.initialize({ startOnLoad: false, theme: document.body.getAttribute('data-theme') === 'dark' ? 'dark' : 'default' });
@@ -487,6 +567,13 @@
         
         const defaultDB = { folders: [{ id: 'root', name: '默认文件夹', isOpen: true }], files: [] };
 
+        // 拼进 innerHTML 的文件名/文件夹名一律先转义：文件名来自用户本机任意 .md
+        //（macOS / 安卓 / Linux 的文件名可以带 < >），形如 <img src=x onerror=…>.md 的文件名
+        // 原来在侧边栏和操作菜单里会被当成 HTML 执行（2026-10-07 实测执行 2 次）。
+        function escapeHtml(s) {
+            return String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+        }
+
         function getDB() {
             let rawStr = localStorage.getItem('md-pro-db');
             if (!rawStr) return JSON.parse(JSON.stringify(defaultDB));
@@ -499,10 +586,32 @@
                     return migratedDB;
                 }
                 return parsed;
-            } catch (e) { return JSON.parse(JSON.stringify(defaultDB)); }
+            } catch (e) {
+                // 存的数据解析不了时，原来直接返回空库——下一次任何保存都会把它写回去，所有文档就此消失。
+                // 先把原文另存一份，再提示用户，至少还有得救。
+                try {
+                    if (!localStorage.getItem('md-pro-db-corrupt-backup')) localStorage.setItem('md-pro-db-corrupt-backup', rawStr);
+                } catch (_) {}
+                if (!getDB.warned) {
+                    getDB.warned = true;
+                    setTimeout(() => alert('本地保存的文档数据损坏，读不出来。原始数据已另存到 localStorage 的 md-pro-db-corrupt-backup，请先别清除浏览器数据。'), 0);
+                }
+                return JSON.parse(JSON.stringify(defaultDB));
+            }
         }
 
-        function saveDB(db) { localStorage.setItem('md-pro-db', JSON.stringify(db)); renderDrawer(); }
+        // 返回是否真的存上了。localStorage 一般只有 5MB 左右，存满时 setItem 会抛异常，原来没接住：
+        // 点「保存」界面停在编辑页、毫无提示，像点了没反应，用户以为存好了关掉页面，改动就没了。
+        function saveDB(db) {
+            try {
+                localStorage.setItem('md-pro-db', JSON.stringify(db));
+            } catch (e) {
+                alert('保存失败：浏览器本地存储空间已满（或被禁用）。\n这次的修改还在编辑框里，请先复制出来，再删掉一些不用的文档后重试。');
+                return false;
+            }
+            renderDrawer();
+            return true;
+        }
 
         const vHome = document.getElementById('view-home');
         const vRead = document.getElementById('view-read');
@@ -528,36 +637,46 @@
         const editorPreview = document.getElementById('editor-preview');
         const btnSort = document.getElementById('btn-sort');
 
-        async function switchState(newState) {
-            currentState = newState;
-            const isMobile = window.innerWidth < 768; 
-            
-            vHome.classList.add('hidden'); vRead.classList.add('hidden'); vEdit.classList.add('hidden');
-            btnFabToc.classList.add('hidden'); 
+        // 顶栏按钮、悬浮目录按钮、目录侧栏这些「外壳」：只跟当前状态和屏幕宽度有关，跟内容无关。
+        // 单独拆出来，是因为窗口宽度跨过 768 断点时只该刷新外壳（见下面的 resize 监听）。
+        function applyChrome(state) {
+            const isMobile = window.innerWidth < 768;
+            btnFabToc.classList.add('hidden');
             Object.values(headerUI).forEach(el => { if(el && el.id !== 'btn-hamburger') el.classList.add('hidden'); });
-            if (newState === 'home') {
-                vHome.classList.remove('hidden'); headerUI.headerLogo.classList.remove('hidden');
-                headerUI.btnHomeSample.classList.remove('hidden'); headerUI.btnTheme.classList.remove('hidden'); 
+            if (state === 'home') {
+                headerUI.headerLogo.classList.remove('hidden');
+                headerUI.btnHomeSample.classList.remove('hidden'); headerUI.btnTheme.classList.remove('hidden');
                 tocSidebar.classList.add('collapsed');
-            } else if (newState === 'read') {
-                vRead.classList.remove('hidden'); headerUI.btnBack.classList.remove('hidden');
+            } else if (state === 'read') {
+                headerUI.btnBack.classList.remove('hidden');
                 headerUI.headerTitle.classList.remove('hidden'); headerUI.headerTitle.innerText = currentFile.title;
                 if(isMobile) {
-                    headerUI.btnReadMore.classList.remove('hidden'); btnFabToc.classList.remove('hidden'); 
+                    headerUI.btnReadMore.classList.remove('hidden'); btnFabToc.classList.remove('hidden');
                 } else {
-                    headerUI.btnReadCopy.classList.remove('hidden'); headerUI.btnReadEdit.classList.remove('hidden'); headerUI.btnTheme.classList.remove('hidden'); 
+                    headerUI.btnReadCopy.classList.remove('hidden'); headerUI.btnReadEdit.classList.remove('hidden'); headerUI.btnTheme.classList.remove('hidden');
+                    tocSidebar.classList.remove('collapsed');
                 }
-                await renderMarkdown(currentFile.content, readerContent);
-                generateTOC(); if (!isMobile) tocSidebar.classList.remove('collapsed');
-            } else if (newState === 'edit') {
-                vEdit.classList.remove('hidden'); headerUI.headerTitle.classList.remove('hidden'); headerUI.headerTitle.innerText = "编辑: " + currentFile.title;
+            } else if (state === 'edit') {
+                headerUI.headerTitle.classList.remove('hidden'); headerUI.headerTitle.innerText = "编辑: " + currentFile.title;
                 if(isMobile) {
                     headerUI.btnBack.classList.remove('hidden'); headerUI.btnEditMore.classList.remove('hidden');
                 } else {
                     headerUI.btnEditCancel.classList.remove('hidden'); headerUI.btnEditReset.classList.remove('hidden');
                     headerUI.btnEditSave.classList.remove('hidden'); headerUI.btnTheme.classList.remove('hidden');
                 }
-                tocSidebar.classList.add('collapsed'); originalContent = currentFile.content;
+                tocSidebar.classList.add('collapsed');
+            }
+        }
+
+        async function switchState(newState) {
+            currentState = newState;
+            vHome.classList.add('hidden'); vRead.classList.add('hidden'); vEdit.classList.add('hidden');
+            ({ home: vHome, read: vRead, edit: vEdit })[newState].classList.remove('hidden');
+            applyChrome(newState);
+            if (newState === 'read') {
+                if (await renderMarkdown(currentFile.content, readerContent)) generateTOC();
+            } else if (newState === 'edit') {
+                originalContent = currentFile.content;
                 editorTextarea.value = currentFile.content; await renderMarkdown(currentFile.content, editorPreview);
             }
         }
@@ -567,7 +686,8 @@
             items.forEach(item => {
                 const div = document.createElement('div');
                 div.className = `action-item ${item.danger ? 'danger' : ''} ${item.success ? 'success' : ''} ${item.isTitle ? 'title' : ''}`;
-                div.innerHTML = item.isTitle ? item.text : `<i class="${item.icon}"></i> ${item.text}`;
+                // text 里可能拼着文件名/文件夹名，一律转义；icon 是代码里写死的类名
+                div.innerHTML = item.isTitle ? escapeHtml(item.text) : `<i class="${item.icon}"></i> ${escapeHtml(item.text)}`;
                 if (!item.isTitle) { div.onclick = () => { closeActionMenu(); item.action(); }; }
                 actionMenuItems.appendChild(div);
             });
@@ -600,7 +720,7 @@
 
                 header.innerHTML = `
                     <div class="folder-info">
-                        <i class="fas fa-chevron-right"></i> <i class="fas fa-folder folder-icon"></i> <span>${folder.name}</span>
+                        <i class="fas fa-chevron-right"></i> <i class="fas fa-folder folder-icon"></i> <span>${escapeHtml(folder.name)}</span>
                     </div>
                     <div class="folder-actions">
                         <button class="folder-btn rename-btn" title="重命名"><i class="fas fa-pen"></i></button>
@@ -644,7 +764,7 @@
                     const pinIcon = file.isPinned ? `<i class="fas fa-thumbtack" style="color:var(--apple-blue); margin-right:6px; font-size:12px;"></i>` : '';
                     item.innerHTML = `
                         <div class="history-info">
-                            <span class="history-title">${pinIcon}${file.title}</span>
+                            <span class="history-title">${pinIcon}${escapeHtml(file.title)}</span>
                             <span class="history-date">${new Date(file.timestamp).toLocaleString()}</span>
                         </div>
                         <button class="history-more-btn"><i class="fas fa-ellipsis-h"></i></button>
@@ -713,92 +833,52 @@
         headerUI.btnReadCopy.onclick = () => copyContent(headerUI.btnReadCopy);
         headerUI.btnEditSave.onclick = saveEdit; headerUI.btnEditCancel.onclick = cancelEdit; headerUI.btnEditReset.onclick = resetEdit;
 
-        function saveToCurrentFolder(fileParams) { let db = getDB(); let newFile = { ...fileParams, timestamp: Date.now(), isPinned: false, folderId: 'root' }; const idx = db.files.findIndex(f => f.id === newFile.id); if (idx > -1) { newFile.folderId = db.files[idx].folderId; newFile.isPinned = db.files[idx].isPinned; db.files[idx] = newFile; } else { db.files.unshift(newFile); } saveDB(db); }
-        function saveEdit() { currentFile.content = editorTextarea.value; saveToCurrentFolder(currentFile); switchState('read'); }
+        function saveToCurrentFolder(fileParams) { let db = getDB(); let newFile = { ...fileParams, timestamp: Date.now(), isPinned: false, folderId: 'root' }; const idx = db.files.findIndex(f => f.id === newFile.id); if (idx > -1) { newFile.folderId = db.files[idx].folderId; newFile.isPinned = db.files[idx].isPinned; db.files[idx] = newFile; } else { db.files.unshift(newFile); } return saveDB(db); }
+        // 存失败就留在编辑页，编辑框内容不动（saveDB 已经弹了提示）
+        function saveEdit() { currentFile.content = editorTextarea.value; if (saveToCurrentFolder(currentFile)) switchState('read'); }
+        // 编辑页有没保存的修改
+        function hasUnsavedEdit() { return currentState === 'edit' && editorTextarea.value !== originalContent; }
+        // 关标签页 / 刷新 / 离开时有未保存修改就让浏览器拦一下（浏览器只显示它自己的通用提示文字）
+        window.addEventListener('beforeunload', (e) => { if (hasUnsavedEdit()) { e.preventDefault(); e.returnValue = ''; } });
         function cancelEdit() { if(editorTextarea.value === originalContent || confirm("放弃修改？")) switchState('read'); }
         function resetEdit() { if(confirm("恢复到未修改前？")) { editorTextarea.value = originalContent; renderMarkdown(originalContent, editorPreview); } }
         function copyContent(btnRef) { navigator.clipboard.writeText(currentFile.content).then(() => { if(btnRef) { btnRef.innerHTML = '<i class="fas fa-check"></i>'; setTimeout(() => btnRef.innerHTML = '<i class="fas fa-copy"></i>', 2000); } else alert("✅ 复制成功"); }); }
 
-        function processFileObj(file) { if (!file) return; const title = file.name.replace(/\.[^/.]+$/, ""); const reader = new FileReader(); reader.onload = ev => { currentFile = { id: Date.now().toString(), title, content: ev.target.result }; saveToCurrentFolder(currentFile); switchState('read'); closeDrawer(); }; reader.readAsText(file); }
+        // 编辑到一半拖了个文件进来（或者点了导入）：原来直接切到新文件，没保存的修改一声不响就没了
+        function processFileObj(file) { if (!file) return; if (hasUnsavedEdit() && !confirm('当前文档有未保存的修改，打开新文件会丢掉这些修改。继续吗？')) return; const title = file.name.replace(/\.[^/.]+$/, ""); const reader = new FileReader(); reader.onload = ev => { currentFile = { id: Date.now().toString(), title, content: ev.target.result }; saveToCurrentFolder(currentFile); switchState('read'); closeDrawer(); }; reader.readAsText(file); }
         function handleFile(e) { processFileObj(e.target.files[0]); if (e.target) e.target.value = ''; }
         document.getElementById('file-upload-home').onchange = handleFile; document.getElementById('file-upload-drawer').onchange = handleFile;
         document.addEventListener('dragover', (e) => { e.preventDefault(); });
         document.addEventListener('drop', (e) => { e.preventDefault(); if (e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files.length > 0) { processFileObj(e.dataTransfer.files[0]); } });
 
+        // 每个目标容器一个渲染序号。renderMarkdown 里有 await（语言包、MathJax、Mermaid），连续打字时
+        // 前一次可能还没跑完下一次就开始了；没有这个序号，先开始、后结束的那次会把旧内容盖回预览。
+        const renderSeqs = new WeakMap();
+
+        // 返回 false 表示这次渲染已经被更新的一次取代、中途放弃了
         async function renderMarkdown(text, target) {
+            const seq = (renderSeqs.get(target) || 0) + 1;
+            renderSeqs.set(target, seq);
+            const stale = () => renderSeqs.get(target) !== seq;
             const body = stripFrontMatter(text);
             await ensureCodeLanguagesLoaded(body);
-            target.innerHTML = marked.parse(body);
+            if (stale()) return false;
 
-            // ===== 编辑光标定位同步：给渲染结果标上源码行号 =====
-            // 给每个块标一个 data-start-line（它在源码里的起始行号），供
-            // scrollPreviewToCursor() 反查"光标这一行对应预览区哪一块"。
-            //
-            // 【安全约束，不可改写】这里刻意不用 marked.lexer()+marked.parser([token])
-            // 逐块单独渲染：marked.use() 注册的 postprocess 钩子（DOMPurify.sanitize，
-            // 防止 .md 里夹带的 <script>/onerror 被执行）只在 marked.parse() 这条完整
-            // 流水线上生效，单独调用 marked.parser() 不会触发它（实测验证过：同一段带
-            // onerror 的内容，marked.parse() 正确剥离，逐块渲染会原样漏过去）。
-            // 所以上面那行已经过完整流水线（含净化）的 innerHTML 一个字都不动，只用
-            // marked.lexer() 做纯分词（不产出任何 HTML，只为拿到每块的起始行号），
-            // 再按顺序往现成 DOM 上加几个数字属性——不重新生成 HTML，不引入 XSS 风险。
-            //
-            // 【本站特有，与 markdown-reader 的写法不同】lexer 绝不能传第二个参数。
-            // 传 { gfm, breaks } 会覆盖全局配置、丢掉 marked.use() 注册的 extensions，
-            // 于是 mathBlock（$$ 跨空行）会被拆成 3 个 paragraph token，token 与 DOM
-            // 子元素的一一对应关系断裂、打标整体错位，而且不报任何错。实测：传参
-            // 12 个 token vs 10 个 DOM 子元素，不传参 10 vs 10。
-            const lineTrackingTokens = marked.lexer(body).filter(t => t.type !== 'space');
-            const startLineAt = (offset) => (body.slice(0, offset).match(/\n/g) || []).length;
+            // 【安全约束，不可改写】产出 HTML 的永远是完整的 marked.parse()：marked.use() 注册的 postprocess
+            // 钩子（DOMPurify.sanitize）只在这条完整流水线上生效，marked.lexer()+marked.parser([token]) 逐块渲染
+            // 不会触发它（实测验证过：同一段带 onerror 的内容，marked.parse() 正确剥离，逐块渲染原样漏过去）。
+            // 编辑预览的行号标记也是在这次 parse 的 processAllTokens 钩子里插的（见 annotateBlocks），同样经过净化。
+            const isPreview = target === editorPreview;
+            markBlocks = isPreview;
+            markBlocksOut = [];
+            let html;
+            try { html = marked.parse(body); } finally { markBlocks = false; }
+            const blocks = markBlocksOut;
+            target.innerHTML = html;
 
-            // 按 raw 在源码里的出现位置定位每个 token。cursor 是"从哪里开始往后找"的
-            // 游标，必须严格随文档顺序推进——否则内容完全相同的两行（题目整理这类高度
-            // 重复的文档里很常见）会被一起匹配到最前面那一处，行号全部算错。
-            function tagList(items, listEl, listOffset) {
-                let cursor = listOffset;
-                items.forEach((item, j) => {
-                    const raw = item.raw || '';
-                    let idx = raw ? body.indexOf(raw, cursor) : cursor;
-                    if (idx === -1) idx = cursor;
-                    const li = listEl.children[j];
-                    if (li) {
-                        li.dataset.startLine = startLineAt(idx);
-                        const nestedEls = Array.from(li.children).filter(c => c.tagName === 'UL' || c.tagName === 'OL');
-                        (item.tokens || []).filter(t => t.type === 'list').forEach((nt, k) => {
-                            if (nestedEls[k] && Array.isArray(nt.items)) tagList(nt.items, nestedEls[k], idx);
-                        });
-                    }
-                    cursor = idx + raw.length;
-                });
-            }
+            // 列表项、嵌套列表项、表格行再各自打上起始行号，粒度细到"源码一行"
+            if (isPreview) tagBlockDetails(target, blocks, markSrc);
 
-            function tagTable(tableEl, tableOffset) {
-                // GFM 表格源码结构固定：第1行表头、第2行分隔线、之后每行一条数据，
-                // 行号直接推算即可，不去 body 里搜（单元格内容重复率高，搜容易错位）。
-                const base = startLineAt(tableOffset);
-                const headRow = tableEl.querySelector('thead tr');
-                if (headRow) headRow.dataset.startLine = base;
-                tableEl.querySelectorAll('tbody tr').forEach((tr, i) => { tr.dataset.startLine = base + 2 + i; });
-            }
-
-            let searchFrom = 0;
-            lineTrackingTokens.forEach((token, i) => {
-                const raw = token.raw || '';
-                let idx = raw ? body.indexOf(raw, searchFrom) : searchFrom;
-                if (idx === -1) idx = searchFrom;
-                const startLine = startLineAt(idx);
-                const el = target.children[i];
-                if (el) {
-                    el.dataset.startLine = startLine;
-                    // 记下这块占到第几行。像代码块这种内部再没有更细元素可选的整块内容
-                    // （60 行代码块就渲染成一个 <pre>），只有知道行号区间，才能按"光标在
-                    // 这块的第几行"滚到块内部对应位置，而不是一律滚到块开头。
-                    el.dataset.endLine = startLine + Math.max(0, raw.replace(/\n+$/, '').split('\n').length - 1);
-                    if (token.type === 'list' && Array.isArray(token.items)) tagList(token.items, el, idx);
-                    else if (token.type === 'table') tagTable(el, idx);
-                }
-                searchFrom = idx + raw.length;
-            });
             // 打标必须在下面这些改动 DOM 的步骤之前完成：MathJax 排版、代码块包进
             // .code-block-wrapper、mermaid 替换节点，都会打乱 target.children 的顺序
             // 或层级。属性打在元素自身上，元素之后被移动也不影响——scrollPreviewToCursor
@@ -815,6 +895,7 @@
                     await MathJax.typesetPromise([target]).catch((err) => console.error('MathJax 渲染报错:', err));
                 }
                 target.classList.remove('math-pending');
+                if (stale()) return false;
             }
 
             const usedSlugs = new Set();
@@ -831,12 +912,80 @@
             if (mermaidBlocks.length > 0) {
                 mermaidBlocks.forEach((block) => {
                     const pre = block.parentNode; const codeWrapper = pre.parentNode; const wrapper = document.createElement('div'); wrapper.className = 'mermaid-wrapper';
-                    const graph = document.createElement('div'); graph.className = 'mermaid'; graph.textContent = block.textContent; wrapper.appendChild(graph);
+                    const graph = document.createElement('div'); graph.className = 'mermaid'; graph.textContent = block.textContent; graph.dataset.source = block.textContent; wrapper.appendChild(graph);
                     const copyBtn = codeWrapper.querySelector('.copy-code-btn'); if (copyBtn) wrapper.appendChild(copyBtn); codeWrapper.replaceWith(wrapper);
                 });
                 mermaid.initialize({ startOnLoad: false, theme: document.body.getAttribute('data-theme') === 'dark' ? 'dark' : 'default' });
-                await mermaid.run({ nodes: target.querySelectorAll('.mermaid') });
+                if (!stale()) await mermaid.run({ nodes: target.querySelectorAll('.mermaid') });
             }
+            return !stale();
+        }
+
+        // 一个行号标记管辖的元素：从它后面一个开始，到下一个标记为止
+        function blockElements(mark) {
+            const els = [];
+            for (let el = mark.nextElementSibling; el && !el.classList.contains('kb-block-mark'); el = el.nextElementSibling) els.push(el);
+            return els;
+        }
+
+        function tagBlockDetails(target, blocks, src) {
+            // 按 raw 在源码里的出现位置定位每个列表项。cursor 必须严格随文档顺序推进——否则内容完全相同
+            // 的两行（题目整理这类高度重复的文档里很常见）会被一起匹配到最前面那一处。
+            function tagList(items, listEl, listOffset) {
+                let cursor = listOffset;
+                items.forEach((item, j) => {
+                    const raw = item.raw || '';
+                    let idx = raw ? src.indexOf(raw, cursor) : cursor;
+                    if (idx === -1) idx = cursor;
+                    const li = listEl.children[j];
+                    if (li && li.tagName === 'LI') {
+                        li.dataset.startLine = (src.slice(0, idx).match(/\n/g) || []).length;
+                        const nestedEls = Array.from(li.children).filter(c => c.tagName === 'UL' || c.tagName === 'OL');
+                        (item.tokens || []).filter(t => t.type === 'list').forEach((nt, k) => {
+                            if (nestedEls[k] && Array.isArray(nt.items)) tagList(nt.items, nestedEls[k], idx);
+                        });
+                    }
+                    cursor = idx + raw.length;
+                });
+            }
+            // GFM 表格源码结构固定：第1行表头、第2行分隔线、之后每行一条数据，行号直接推算
+            function tagTable(tableEl, startLine) {
+                const headRow = tableEl.querySelector('thead tr');
+                if (headRow) headRow.dataset.startLine = startLine;
+                tableEl.querySelectorAll('tbody tr').forEach((tr, i) => { tr.dataset.startLine = startLine + 2 + i; });
+            }
+            target.querySelectorAll('.kb-block-mark').forEach((mark) => {
+                const block = blocks[Number(mark.dataset.block)];
+                const first = block && blockElements(mark)[0];
+                if (!first) return;
+                if (block.type === 'list' && /^(UL|OL)$/.test(first.tagName) && Array.isArray(block.token.items)) tagList(block.token.items, first, block.offset);
+                else if (block.type === 'table' && first.tagName === 'TABLE') tagTable(first, block.startLine);
+            });
+        }
+
+        // 源码第 line 行 → 预览里的定位点（整块、列表项或表格行）。文档顺序下起始行号单调不减，
+        // 所以"取最后一个 <= 光标行"可以遇到更大的就 break。渲染不出元素的块（链接定义、HTML 注释）
+        // 没有位置可去，跳过，落到前一个点上。
+        function locatePreviewLine(container, line) {
+            let hit = null;
+            for (const point of container.querySelectorAll('[data-start-line]')) {
+                if (Number(point.dataset.startLine) > line) break;
+                if (point.classList.contains('kb-block-mark') && !blockElements(point).length) continue;
+                hit = point;
+            }
+            if (!hit) hit = Array.from(container.querySelectorAll('.kb-block-mark')).find(m => blockElements(m).length) || null;
+            if (!hit) return null;
+            let flash, top, height;
+            if (hit.classList.contains('kb-block-mark')) {
+                flash = blockElements(hit);
+                const first = flash[0].getBoundingClientRect(), last = flash[flash.length - 1].getBoundingClientRect();
+                top = first.top; height = Math.max(0, last.bottom - first.top);
+            } else {
+                flash = [hit];
+                const r = hit.getBoundingClientRect();
+                top = r.top; height = r.height;
+            }
+            return { top, height, startLine: Number(hit.dataset.startLine), endLine: Number(hit.dataset.endLine), flash };
         }
         
         function generateTOC() {
@@ -848,59 +997,47 @@
             });
         }
         
-        function flashHighlight(el) {
-            if (!el) return;
-            el.classList.remove('sync-highlight');
-            void el.offsetWidth; // 强制回流，让重新加上 class 能重播动画
-            el.classList.add('sync-highlight');
-            setTimeout(() => el.classList.remove('sync-highlight'), 900);
+        function flashHighlight(els) {
+            editorPreview.querySelectorAll('.sync-highlight').forEach(n => n.classList.remove('sync-highlight'));
+            if (!els || !els.length) return;
+            void els[0].offsetWidth; // 强制回流，让重新加上 class 能重播动画
+            els.forEach(el => el.classList.add('sync-highlight'));
+            setTimeout(() => els.forEach(el => el.classList.remove('sync-highlight')), 900);
         }
 
         function scrollPreviewToCursor() {
-            // 用 querySelectorAll 而不是只看 editorPreview.children：列表项、嵌套列表项、
-            // 表格行也各自带了 data-start-line，只收顶层子元素的话粒度会退回"一个列表算
-            // 一个点"。另外代码块的 <pre> 被移进 .code-block-wrapper 后就不再是直接子元素，
-            // 用 children 的话在代码块里点会落空到上一个标题上。
-            // querySelectorAll 返回文档顺序，而文档顺序下 data-start-line 单调不减
-            // （父元素起始行 <= 它第一个子元素起始行），所以下面"取最后一个 <= 光标行"
-            // 配合 break 提前退出依然成立。
-            const blocks = Array.from(editorPreview.querySelectorAll('[data-start-line]'));
-            if (blocks.length === 0) return;
-            const cursorLine = (editorTextarea.value.slice(0, editorTextarea.selectionStart).match(/\n/g) || []).length;
-            let target = blocks[0];
-            for (const block of blocks) {
-                if (Number(block.dataset.startLine) <= cursorLine) target = block; else break;
-            }
-            // 不用 target.scrollIntoView({block:'center'})：它会连带滚动所有可滚动祖先；
-            // 目标比可视区高时"居中"会把开头顶出屏幕；而且 center 也不是想要的落点——
-            // 光标那一行应当顶到最上面。所以直接算 .preview-pane（真正带 overflow-y:auto
-            // 的那层）该滚多少，统一顶部对齐。
+            const value = editorTextarea.value;
+            // 预览渲染的是去掉 YAML front matter 之后的正文（stripFrontMatter），行号按正文算；光标行号却是按
+            // 整个编辑框算的。原来没扣掉这一段，带 front matter 的文档光标同步整体错开头部那几行
+            //（2026-10-07 实测：光标在「第25段」预览停在「第27段」）。
+            const fmLength = value.length - stripFrontMatter(value).length;
+            const fmLines = (value.slice(0, fmLength).match(/\n/g) || []).length;
+            const cursorLine = (value.slice(0, editorTextarea.selectionStart).match(/\n/g) || []).length - fmLines;
+            const hit = locatePreviewLine(editorPreview, cursorLine);
+            if (!hit) return;
+            // 不用 scrollIntoView({block:'center'})：它会连带滚动所有可滚动祖先，目标比可视区高时"居中"会把开头顶出屏幕，
+            // 而且光标那一行应当顶到最上面。直接算 .preview-pane（真正带 overflow-y:auto 的那层）该滚多少。
             const TOP_GAP = 12;
             const pane = editorPreview.closest('.preview-pane') || editorPreview.parentElement;
             if (!pane) return;
             const paneRect = pane.getBoundingClientRect();
-            const rect = target.getBoundingClientRect();
-            // 目标比可视区还高时（长代码块这种块内没有更细元素可选的情况），不能直接拿
-            // 块顶边对齐——那样在 60 行的代码块里点第 50 行，看到的还是第 1 行，等于没定位。
-            // 用 data-end-line 按"光标在这块的第几行"在块内插值，把那一行本身顶到最上面。
-            let anchorTop = rect.top;
-            if (rect.height >= paneRect.height) {
-                const start = Number(target.dataset.startLine);
-                const end = Number(target.dataset.endLine);
-                const span = Number.isFinite(end) && end > start ? end - start : 0;
-                const ratio = span > 0 ? Math.min(1, Math.max(0, (cursorLine - start) / span)) : 0;
-                anchorTop = rect.top + ratio * rect.height;
+            // 目标比可视区还高时（长代码块这种块内没有更细元素可选的情况），按"光标在这块的第几行"在块内插值
+            let anchorTop = hit.top;
+            if (hit.height >= paneRect.height) {
+                const span = Number.isFinite(hit.endLine) && hit.endLine > hit.startLine ? hit.endLine - hit.startLine : 0;
+                const ratio = span > 0 ? Math.min(1, Math.max(0, (cursorLine - hit.startLine) / span)) : 0;
+                anchorTop = hit.top + ratio * hit.height;
             }
             pane.scrollTop += anchorTop - paneRect.top - TOP_GAP;
-            flashHighlight(target);
+            flashHighlight(hit.flash);
         }
 
         const CURSOR_MOVE_KEYS = new Set(['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Home', 'End', 'PageUp', 'PageDown']);
         editorTextarea.addEventListener('click', scrollPreviewToCursor);
         editorTextarea.addEventListener('keyup', e => { if (CURSOR_MOVE_KEYS.has(e.key)) scrollPreviewToCursor(); });
-        // renderMarkdown 内部 await 了 MathJax 排版，所以这里 await 之后再定位，
-        // 量到的元素位置才是公式排版完成后的最终位置。
-        editorTextarea.addEventListener('input', async e => { await renderMarkdown(e.target.value, editorPreview); scrollPreviewToCursor(); });
+        // renderMarkdown 内部 await 了 MathJax 排版，所以 await 之后再定位，量到的才是排版后的最终位置；
+        // 只有没被后来的渲染取代的那一次才去定位，免得旧的那次跑完把预览滚回旧位置
+        editorTextarea.addEventListener('input', async e => { if (await renderMarkdown(e.target.value, editorPreview)) scrollPreviewToCursor(); });
         document.getElementById('menu-new').onclick = () => { const title = prompt("新文档名称：", "未命名文档"); if (title) { currentFile = { id: Date.now().toString(), title, content: `# ${title}\n\n` }; saveToCurrentFolder(currentFile); closeDrawer(); switchState('edit'); } };
         
         // 示例按钮：可以直接验证你截图里的公式了！
@@ -911,12 +1048,32 @@
         };
         
         function toggleTheme() { setTheme(document.body.getAttribute('data-theme') !== 'dark'); }
-        headerUI.btnTheme.onclick = toggleTheme; window.onresize = () => switchState(currentState);
+        headerUI.btnTheme.onclick = toggleTheme;
+        // 原来是 window.onresize = () => switchState(currentState)：每次窗口尺寸变化都整个重走一遍状态切换——
+        // 编辑状态下会把编辑框重置成 currentFile.content，没保存的修改全部丢失（2026-10-07 实测；
+        // 手机转屏、电脑拖窗口大小都会触发）；阅读状态下也是每一帧都把整篇连同 MathJax 重新排版一遍。
+        // 真正需要随宽度变的只有顶栏按钮和目录栏，而且只在跨过 768 断点时才变。
+        let lastIsMobile = window.innerWidth < 768;
+        window.addEventListener('resize', () => {
+            const isMobile = window.innerWidth < 768;
+            if (isMobile === lastIsMobile) return;
+            lastIsMobile = isMobile;
+            applyChrome(currentState);
+        });
 
         function setTheme(isDark) {
             document.body.setAttribute('data-theme', isDark ? 'dark' : 'light'); headerUI.btnTheme.innerHTML = isDark ? '<i class="fas fa-sun"></i>' : '<i class="fas fa-moon"></i>';
             localStorage.setItem('md-theme', isDark ? 'dark' : 'light'); document.getElementById('md-style').href = `https://cdnjs.cloudflare.com/ajax/libs/github-markdown-css/5.5.0/github-markdown-${isDark ? 'dark' : 'light'}.min.css`;
             document.getElementById('hljs-style').href = `https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/${isDark ? 'github-dark' : 'github'}.min.css`;
+            rerenderMermaid();
+        }
+        // 切换深色/浅色后，已经画好的 Mermaid 图要按新主题重画（renderMarkdown 画图时把源码记在 data-source 上）
+        function rerenderMermaid() {
+            const graphs = Array.from(document.querySelectorAll('.mermaid[data-source]'));
+            if (!graphs.length) return;
+            graphs.forEach(g => { g.removeAttribute('data-processed'); g.textContent = g.dataset.source; });
+            mermaid.initialize({ startOnLoad: false, theme: document.body.getAttribute('data-theme') === 'dark' ? 'dark' : 'default' });
+            mermaid.run({ nodes: graphs }).catch(err => console.error('Mermaid 重画失败:', err));
         }
         const savedTheme = localStorage.getItem('md-theme'); setTheme(savedTheme === 'dark' || (!savedTheme && window.matchMedia('(prefers-color-scheme: dark)').matches));
         
