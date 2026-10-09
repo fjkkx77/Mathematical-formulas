@@ -7,15 +7,19 @@
     
     <!-- 版本钉死（2026-10-07）：原来 marked / marked-highlight 都没写版本号。marked 从 v16 起不再提供
          marked.min.js，CDN 是「回退到最后一个还有这个文件的版本」才给出 15.0.12 的，属于凑巧能用。
-         这里钉的就是当时实际在跑的版本（marked 15.0.12、marked-highlight 2.2.4），行为不变。 -->
+         这里钉的就是当时实际在跑的版本（marked 15.0.12、marked-highlight 2.2.4），行为不变。
+         2026-10-09 跟 markdown-reader 同步按已公开漏洞升级（那边审查报告 P1-0 / P2-0）：
+         mermaid 10.9.3 → 10.9.8（CVE-2025-54881：时序图标签里带 $$ 能执行代码，另有样式注入、卡死等，10.9.8 全部修完）；
+         dompurify 3.4.10 → 3.4.16。MathJax 原来写的是 mathjax@3（只钉了大版本），钉死到它当时实际给的 3.2.2，行为不变。
+         钉版本的另一面：要定期去 GitHub Advisory Database 查一下这几个版本有没有新公开的漏洞。 -->
     <script src="https://cdn.jsdelivr.net/npm/marked@15.0.12/marked.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/marked-highlight@2.2.4/lib/index.umd.js"></script>
     <!-- 脚注 [^1] 和 GitHub 提示框 > [!NOTE]（2026-10-07 加，跟 markdown-reader 同一对扩展、同一版本） -->
     <script src="https://cdn.jsdelivr.net/npm/marked-footnote@1.4.0/dist/index.umd.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/marked-alert@2.1.2/dist/index.umd.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/dompurify@3.4.10/dist/purify.min.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/mermaid@10.9.3/dist/mermaid.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/dompurify@3.4.16/dist/purify.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/mermaid@10.9.8/dist/mermaid.min.js"></script>
 
     <script>
         // 只放配置，不在这里直接加载 tex-chtml.js 本体——MathJax 体积不小，
@@ -66,22 +70,35 @@
         }
 
         /* ================= 2. 动态顶栏 ================= */
+        /* 刘海安全区：原来先写 padding-top: env(safe-area-inset-top)，下一行 padding: 0 16px 又把它盖成 0，
+           横屏时左右也没让出刘海。现在一次写全：上边让出状态栏，左右至少 16px、有刘海时让出刘海。 */
         header {
             flex-shrink: 0; height: calc(var(--header-height) + env(safe-area-inset-top));
-            padding-top: env(safe-area-inset-top); background: var(--header-bg);
+            padding: env(safe-area-inset-top) max(16px, env(safe-area-inset-right)) 0 max(16px, env(safe-area-inset-left));
+            background: var(--header-bg);
             backdrop-filter: blur(20px); -webkit-backdrop-filter: blur(20px);
             border-bottom: 1px solid var(--border-color); display: flex; align-items: center;
-            justify-content: space-between; padding: 0 16px; z-index: 100;
+            justify-content: space-between; z-index: 100;
         }
 
-        .header-section { display: flex; align-items: center; gap: 6px; flex: 1; min-width: 0; }
-        .header-center { flex: 2; justify-content: center; text-align: center; min-width: 0; padding: 0 12px; }
-        .header-right { justify-content: flex-end; gap: 8px; flex: 1; min-width: 0; }
+        /* 左右两侧按钮区按内容实际宽度排布（不参与拉伸抢空间），标题区独占剩余空间、自适应收缩。
+           原来是 1:2:1 按比例分：右侧按钮一多（这次加了目录开关、下载），电脑窄窗口下右侧放不下会被挤压。
+           跟 markdown-reader 的顶栏布局一致。 */
+        .header-section { display: flex; align-items: center; gap: 6px; flex: 0 0 auto; min-width: 0; }
+        .header-center { flex: 1; justify-content: center; text-align: center; min-width: 0; padding: 0 12px; }
+        .header-right { justify-content: flex-end; gap: 2px; flex: 0 0 auto; min-width: 0; }
 
-        .icon-btn { background: none; border: none; color: var(--apple-blue); flex-shrink: 0; font-size: 1.3rem; padding: 8px; border-radius: 8px; cursor: pointer; display: flex; align-items: center; justify-content: center; transition: opacity 0.2s; }
+        /* 触摸区域至少 44×44（Apple HIG 建议值），图标本身大小不变，只是能点的范围变大 */
+        .icon-btn { background: none; border: none; color: var(--apple-blue); flex-shrink: 0; font-size: 1.3rem; padding: 8px; min-width: 44px; min-height: 44px; border-radius: 8px; cursor: pointer; display: flex; align-items: center; justify-content: center; transition: opacity 0.2s; }
         .icon-btn:active { opacity: 0.5; }
-        
-        .text-btn { background: none; border: none; color: var(--apple-blue); flex-shrink: 0; font-size: 16px; font-weight: 500; padding: 6px 10px; border-radius: 6px; cursor: pointer; display: flex; align-items: center; gap: 4px; transition: background 0.2s; }
+
+        .text-btn { background: none; border: none; color: var(--apple-blue); flex-shrink: 0; font-size: 16px; font-weight: 500; padding: 6px 10px; min-height: 44px; border-radius: 6px; cursor: pointer; display: flex; align-items: center; gap: 4px; transition: background 0.2s; }
+        /* 顶栏里的「编辑」「保存」蓝底按钮：可点范围 44 高，蓝底本身保持原来的大小（用内层背景画出来） */
+        header .text-btn.primary { background: none; padding: 0; }
+        header .text-btn.primary > .btn-face { background: var(--apple-blue); color: white; padding: 6px 10px; border-radius: 6px; display: flex; align-items: center; gap: 4px; }
+        header .text-btn.primary:active { background: none; opacity: 0.7; }
+        /* 开关类按钮（目录收起/展开）打开时的底色。markdown-reader 那边是给代码行号开关加的，本站原来没有这条 */
+        .icon-btn.active { background: rgba(0, 122, 255, 0.15); }
         .text-btn:active { background: rgba(128,128,128,0.2); }
         .text-btn.danger { color: var(--apple-red); }
         .text-btn.primary { background: var(--apple-blue); color: white; font-weight: 600; }
@@ -103,6 +120,11 @@
         .toc-link { display: block; padding: 8px 20px; color: var(--text-main); text-decoration: none; font-size: 14px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; border-left: 3px solid transparent; }
         .toc-link:active { background: rgba(128,128,128,0.1); }
         .toc-h1 { font-weight: 600; } .toc-h2 { padding-left: 30px; } .toc-h3 { padding-left: 40px; font-size: 13px; color: var(--text-secondary); }
+        /* 四级标题原来没写，退回到 .toc-link 的 20px，比二、三级还浅 */
+        .toc-h4 { padding-left: 50px; font-size: 13px; color: var(--text-secondary); }
+        /* 阅读时高亮「当前读到的这一节」 */
+        .toc-link.active { color: var(--apple-blue); border-left-color: var(--apple-blue); background: rgba(0, 122, 255, 0.08); }
+        .toc-empty { padding: 20px; color: var(--text-secondary); font-size: 14px; }
 
         .main-content { flex-grow: 1; position: relative; background: var(--bg-surface); overflow: hidden; }
         .view-layer { position: absolute; top: 0; left: 0; right: 0; bottom: 0; overflow-y: auto; -webkit-overflow-scrolling: touch; background: var(--bg-surface); }
@@ -112,7 +134,8 @@
         .upload-card { background: var(--bg-surface); border-radius: 16px; padding: 40px; text-align: center; border: 1px solid var(--border-color); width: 100%; max-width: 400px; box-shadow: 0 4px 15px rgba(0,0,0,0.05); }
         .upload-icon { font-size: 4rem; color: var(--apple-blue); margin-bottom: 20px; }
         .upload-title { font-size: 1.2rem; font-weight: 500; margin-bottom: 24px; color: var(--text-secondary); }
-        .btn-upload-lg { background: var(--apple-green); color: white; padding: 12px 24px; border-radius: 8px; font-weight: 600; font-size: 15px; display: inline-flex; align-items: center; gap: 8px; cursor: pointer; transition: transform 0.1s; }
+        /* 原来是苹果系统绿 #34C759 配白字，对比度只有 2.22:1（强光下看不清）；加深到 #218838，白字 4.52:1 达标，色相不变 */
+        .btn-upload-lg { background: #218838; color: white; padding: 12px 24px; border-radius: 8px; font-weight: 600; font-size: 15px; display: inline-flex; align-items: center; gap: 8px; cursor: pointer; transition: transform 0.1s; }
         .btn-upload-lg:active { transform: scale(0.96); }
 
         .view-read { padding: 30px 20px; padding-bottom: calc(30px + env(safe-area-inset-bottom)); }
@@ -123,12 +146,20 @@
            markdown-reader 那样把代码钉在 13px 上对齐行号。 */
         :root { --md-font-scale: 1; }
         .markdown-body { background: transparent !important; color: inherit !important; font-family: inherit !important; font-size: calc(16px * var(--md-font-scale)) !important; }
+        /* 文档里行内 style 是保留的（彩色文字要靠它），但 position:fixed + 大 z-index 能盖住整个应用。
+           layout 包含让文档内容自成一个容器：fixed 的元素只相对正文定位、层级也出不去，不会盖住顶栏和菜单。 */
+        #reader-content, #editor-preview { contain: layout; }
+        /* Mermaid 图写错时，在图的位置显示提示和源码，不影响后面的目录等 */
+        .mermaid-error { border: 1px solid var(--apple-red); border-radius: 8px; padding: 10px 12px; color: var(--apple-red); font-size: 14px; }
+        .mermaid-error pre { margin: 8px 0 0 !important; color: var(--text-main); white-space: pre-wrap; }
         /* 脚注区的「脚注」标题：跟 GitHub 一样留给读屏软件、视觉上藏起来。github-markdown-css 不带这个类。 */
         .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
 
         .markdown-body pre { position: relative; }
         .markdown-body .code-block-wrapper { position: relative; }
         .copy-code-btn { position: absolute; top: 8px; right: 8px; background: rgba(128, 128, 128, 0.2); backdrop-filter: blur(5px); -webkit-backdrop-filter: blur(5px); border: none; border-radius: 4px; padding: 4px 8px; font-size: 12px; color: var(--apple-blue); cursor: pointer; opacity: 0.6; transition: opacity 0.2s; z-index: 2; }
+        /* 复制按钮本身只有 24px 高，用一层透明的伪元素把能点的范围扩到约 44px，按钮看起来不变 */
+        .copy-code-btn::after { content: ''; position: absolute; inset: -10px -8px; }
         .copy-code-btn:hover { opacity: 1; }
 
         .markdown-body .mermaid-wrapper { position: relative; }
@@ -159,16 +190,35 @@
         #editor-preview .sync-highlight { animation: sync-highlight-flash 0.9s ease-out; border-radius: 6px; }
         @keyframes sync-highlight-flash { from { background: var(--sync-highlight-bg); } to { background: transparent; } }
 
-        @media (min-width: 768px) { .view-edit { flex-direction: row; } .edit-pane { border-bottom: none; border-right: 1px solid var(--border-color); } }
-        @media (max-width: 767px) { 
-            .toc-sidebar { position: fixed; top: 0; left: -280px; width: 280px; height: 100%; z-index: 201; box-shadow: 2px 0 20px rgba(0,0,0,0.2); transition: transform 0.3s cubic-bezier(0.25, 0.8, 0.25, 1); } 
-            .toc-sidebar.mobile-open { transform: translateX(280px); } 
-            .desktop-only { display: none !important; } 
+        /* 手机上编辑和预览改成两个标签切换（原来上下各占半屏，键盘一弹编辑区只剩一小条）。
+           电脑上照旧左右并排，这一排标签不显示。 */
+        .edit-tabs { display: none; }
+        @media (max-width: 767px) {
+            .edit-tabs { display: flex; flex-shrink: 0; gap: 0; padding: 6px 16px; background: var(--bg-surface); border-bottom: 1px solid var(--border-color); }
+            .edit-tabs .seg { flex: 1; display: flex; background: rgba(118, 118, 128, 0.12); border-radius: 9px; padding: 2px; }
+            .edit-tabs button { flex: 1; min-height: 36px; border: none; background: none; border-radius: 7px; font-size: 14px; font-weight: 500; color: var(--text-main); cursor: pointer; transition: background 0.2s, box-shadow 0.2s; }
+            .edit-tabs button.on { background: var(--bg-surface); box-shadow: 0 1px 4px rgba(0,0,0,0.15); font-weight: 600; }
+            [data-theme="dark"] .edit-tabs button.on { background: #636366; }
+            .view-edit.tab-edit .preview-pane { display: none; }
+            .view-edit.tab-preview .edit-pane { display: none; }
+            .view-edit .edit-pane { border-bottom: none; }
+        }
+
+        @media (min-width: 768px) { .view-edit { flex-direction: row; } .edit-pane { border-bottom: none; border-right: 1px solid var(--border-color); } .mobile-only { display: none !important; } }
+        @media (max-width: 767px) {
+            /* 收起时不带阴影：原来收起的目录栏藏在屏幕左外侧，阴影却漏进屏幕，每个界面左边缘都有一条灰带 */
+            .toc-sidebar { position: fixed; top: 0; bottom: 0; left: -280px; width: 280px; height: auto; z-index: 201; box-shadow: none; padding-top: calc(20px + env(safe-area-inset-top)); padding-bottom: calc(20px + env(safe-area-inset-bottom)); transition: transform 0.3s cubic-bezier(0.25, 0.8, 0.25, 1), box-shadow 0.3s; }
+            .toc-sidebar.mobile-open { transform: translateX(280px); box-shadow: 2px 0 20px rgba(0,0,0,0.2); }
+            .desktop-only { display: none !important; }
+            /* 右下角悬浮目录按钮（50px + 底部 20px）会盖住文末一两行，文末留出它的位置 */
+            .view-read { padding-bottom: calc(96px + env(safe-area-inset-bottom)); }
         }
 
         /* ================= 5. 左侧历史/文件夹抽屉 ================= */
         .overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.4); z-index: 200; display: none; opacity: 0; transition: opacity 0.3s; }
-        .drawer { position: fixed; top: 0; left: 0; height: 100vh; width: 280px; background: var(--bg-surface); z-index: 201; transform: translateX(-100%); transition: transform 0.3s cubic-bezier(0.25, 0.8, 0.25, 1); display: flex; flex-direction: column; }
+        /* 原来 height:100vh：iPhone Safari 的 100vh 比可见区域高（按地址栏收起后算），文档多时最底下几篇会被工具栏挡住。
+           改成上下都钉在屏幕边上（top:0 + bottom:0），高度就是实际可见的那么高。横屏有刘海时左边让出来。 */
+        .drawer { position: fixed; top: 0; bottom: 0; left: 0; width: calc(280px + env(safe-area-inset-left)); padding-left: env(safe-area-inset-left); background: var(--bg-surface); z-index: 201; transform: translateX(-100%); transition: transform 0.3s cubic-bezier(0.25, 0.8, 0.25, 1); display: flex; flex-direction: column; }
         .drawer-header { padding: 20px; border-bottom: 1px solid var(--border-color); margin-top: env(safe-area-inset-top); font-weight: 600; font-size: 1.2rem; display: flex; justify-content: space-between; align-items: center; }
         .drawer-content { overflow-y: auto; flex-grow: 1; padding-bottom: env(safe-area-inset-bottom); }
         
@@ -178,14 +228,19 @@
         /* 文件夹及拖拽样式 */
         .folder-group { border-bottom: 1px solid var(--border-color); transition: border 0.2s; }
         .folder-group.dragging { opacity: 0.4; background: var(--bg-base); }
-        .folder-group.drag-over { border-top: 2px solid var(--apple-blue); }
+        /* 往上拖：蓝线画在目标上方、插到它前面；往下拖：画在下方、插到它后面（原来一律画上方，往下拖时实际插到后面，提示是反的） */
+        .folder-group.drag-before { box-shadow: inset 0 2px 0 var(--apple-blue); }
+        .folder-group.drag-after { box-shadow: inset 0 -2px 0 var(--apple-blue); }
+        .folder-group.touch-dragging { position: relative; z-index: 5; opacity: 0.85; box-shadow: 0 6px 20px rgba(0,0,0,0.18); transition: none; }
         
-        .folder-header { padding: 12px 20px; display: flex; align-items: center; justify-content: space-between; background: var(--bg-base); cursor: pointer; user-select: none; }
+        .folder-header { padding: 0 8px 0 20px; min-height: 44px; display: flex; align-items: center; justify-content: space-between; gap: 6px; background: var(--bg-base); cursor: pointer; user-select: none; -webkit-user-select: none; -webkit-touch-callout: none; }
         .folder-header:active { background: var(--border-color); }
-        .folder-info { display: flex; align-items: center; gap: 8px; font-weight: 600; font-size: 14px; color: var(--text-main); }
-        .folder-icon { color: var(--apple-gray); width: 16px; text-align: center; }
-        .folder-actions { display: flex; gap: 10px; color: var(--text-secondary); }
-        .folder-btn { background: none; border: none; color: inherit; cursor: pointer; font-size: 14px; padding: 4px; transition: color 0.2s; }
+        /* 很长的英文文件夹名原来会把右边三个按钮挤出侧边栏：名字这一侧可以收缩并显示省略号，按钮那一侧不收缩 */
+        .folder-info { display: flex; align-items: center; gap: 8px; font-weight: 600; font-size: 14px; color: var(--text-main); flex: 1; min-width: 0; min-height: 44px; }
+        .folder-info .folder-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        .folder-icon { color: var(--apple-gray); width: 16px; text-align: center; flex-shrink: 0; }
+        .folder-actions { display: flex; gap: 0; color: var(--text-secondary); flex-shrink: 0; }
+        .folder-btn { background: none; border: none; color: inherit; cursor: pointer; font-size: 14px; padding: 4px; min-width: 36px; min-height: 44px; transition: color 0.2s; }
         .folder-btn:active { color: var(--apple-blue); }
         
         .folder-files { display: none; background: var(--bg-surface); }
@@ -197,9 +252,13 @@
         .history-item { padding: 12px 16px 12px 36px; display: flex; align-items: center; position: relative; border-bottom: 1px solid var(--border-color); }
         .history-item:last-child { border-bottom: none; }
         .history-info { flex-grow: 1; display: flex; flex-direction: column; gap: 4px; overflow: hidden; cursor: pointer; padding-right: 10px; }
-        .history-title { font-size: 14px; font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; display: flex; align-items: center; color: var(--text-main); }
+        /* 外层是 flex（要放置顶图标），flex 容器自己的 text-overflow 不生效——原来长文件名被硬切、没有省略号。
+           省略号放到里面的文字 span 上。 */
+        .history-title { font-size: 14px; font-weight: 500; white-space: nowrap; overflow: hidden; display: flex; align-items: center; color: var(--text-main); min-width: 0; }
+        .history-title .history-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        .history-snippet { font-size: 12px; color: var(--text-secondary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
         .history-date { font-size: 11px; color: var(--text-secondary); }
-        .history-more-btn { background: none; border: none; color: var(--text-secondary); padding: 8px 12px; cursor: pointer; border-radius: 6px; font-size: 16px; }
+        .history-more-btn { background: none; border: none; color: var(--text-secondary); padding: 8px 12px; min-width: 44px; min-height: 44px; cursor: pointer; border-radius: 6px; font-size: 16px; flex-shrink: 0; }
         .history-more-btn:active, .history-more-btn.active { background: rgba(128,128,128,0.15); color: var(--text-main); }
         
         /* 悬浮菜单 & Tooltip */
@@ -221,6 +280,62 @@
         .fab-toc { position: fixed; bottom: calc(20px + env(safe-area-inset-bottom)); right: 20px; width: 50px; height: 50px; border-radius: 25px; background: var(--apple-blue); color: white; border: none; box-shadow: 0 4px 15px rgba(0, 122, 255, 0.4); font-size: 20px; z-index: 150; display: flex; align-items: center; justify-content: center; cursor: pointer; transition: transform 0.2s, opacity 0.2s, background 0.2s; }
         .fab-toc:active { transform: scale(0.9); background: #005ecb; }
 
+        /* ================= 6. 页面内弹框（替代浏览器原生 alert/confirm/prompt） =================
+           样式照 iOS 的警告框：屏幕正中、标题加粗、两个按钮左右并排、三个以上竖排，危险操作红字。
+           原生弹框在 iPhone 上顶部还会显示网址，也没法统一深色模式。（跟 markdown-reader 同一套） */
+        .dlg-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.4); z-index: 2000; display: flex; align-items: center; justify-content: center; padding: 24px; opacity: 0; transition: opacity 0.2s; }
+        .dlg-overlay.show { opacity: 1; }
+        /* 关掉后还要淡出 0.2 秒，这段时间里不能挡住下面的点击 */
+        .dlg-overlay:not(.show) { pointer-events: none; }
+        /* 底色几乎不透明：毛玻璃没渲染出来的环境里（省电模式、部分安卓），后面的正文透上来会跟弹框文字叠在一起 */
+        .dlg { width: 100%; max-width: 300px; background: rgba(250, 250, 252, 0.96); backdrop-filter: blur(30px); -webkit-backdrop-filter: blur(30px); border-radius: 14px; overflow: hidden; transform: scale(1.08); transition: transform 0.2s cubic-bezier(0.25, 0.8, 0.25, 1); box-shadow: 0 10px 40px rgba(0,0,0,0.25); }
+        [data-theme="dark"] .dlg { background: rgba(44, 44, 46, 0.96); }
+        .dlg-overlay.show .dlg { transform: scale(1); }
+        .dlg-body { padding: 18px 16px 16px; text-align: center; }
+        .dlg-title { font-size: 17px; font-weight: 600; color: var(--text-main); word-break: break-word; }
+        .dlg-msg { margin-top: 6px; font-size: 13px; line-height: 1.45; color: var(--text-main); white-space: pre-line; word-break: break-word; }
+        .dlg-input { margin-top: 14px; width: 100%; font-size: 16px; padding: 8px 10px; border-radius: 8px; border: 1px solid var(--border-color); background: var(--bg-surface); color: var(--text-main); outline: none; }
+        .dlg-input:focus { border-color: var(--apple-blue); }
+        .dlg-btns { display: flex; border-top: 1px solid var(--border-color); }
+        .dlg-btns.vertical { flex-direction: column; }
+        .dlg-btn { flex: 1; min-height: 44px; border: none; background: none; font-size: 17px; color: var(--apple-blue); cursor: pointer; padding: 10px 8px; }
+        .dlg-btns:not(.vertical) .dlg-btn + .dlg-btn { border-left: 1px solid var(--border-color); }
+        .dlg-btns.vertical .dlg-btn + .dlg-btn { border-top: 1px solid var(--border-color); }
+        .dlg-btn:active { background: rgba(128,128,128,0.15); }
+        .dlg-btn.bold { font-weight: 600; }
+        .dlg-btn.destructive { color: var(--apple-red); }
+
+        /* 轻提示：复制成功之类只闪一下，不用点「确定」 */
+        .toast { position: fixed; left: 50%; bottom: calc(90px + env(safe-area-inset-bottom)); transform: translate(-50%, 10px); background: rgba(30,30,32,0.92); color: #fff; padding: 10px 18px; border-radius: 20px; font-size: 14px; z-index: 2100; opacity: 0; pointer-events: none; transition: opacity 0.2s, transform 0.2s; max-width: calc(100vw - 32px); text-align: center; }
+        .toast.show { opacity: 1; transform: translate(-50%, 0); }
+
+        /* 「回到上次读到的位置」：打开读过的文档时在底部出现几秒，点了才跳，不自动跳 */
+        .resume-pill { position: fixed; left: 50%; bottom: calc(24px + env(safe-area-inset-bottom)); transform: translate(-50%, 20px); z-index: 160; display: flex; align-items: center; background: var(--header-bg); backdrop-filter: blur(25px); -webkit-backdrop-filter: blur(25px); border: 1px solid var(--border-color); border-radius: 22px; box-shadow: 0 6px 24px rgba(0,0,0,0.15); opacity: 0; pointer-events: none; transition: opacity 0.25s, transform 0.25s cubic-bezier(0.25, 0.8, 0.25, 1); max-width: calc(100vw - 32px - 70px); }
+        .resume-pill.show { opacity: 1; pointer-events: auto; transform: translate(-50%, 0); }
+        .resume-pill button { background: none; border: none; color: var(--apple-blue); font-size: 15px; font-weight: 500; min-height: 44px; padding: 0 6px 0 16px; cursor: pointer; display: flex; align-items: center; gap: 6px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+        .resume-pill .resume-close { color: var(--text-secondary); padding: 0 14px 0 8px; min-width: 40px; }
+        @media (max-width: 767px) { .resume-pill { left: 16px; transform: translateY(20px); } .resume-pill.show { transform: translateY(0); } }
+
+        /* 首页：继续阅读 */
+        .continue-btn { margin-top: 14px; width: 100%; display: flex; flex-direction: column; align-items: flex-start; gap: 2px; text-align: left; background: rgba(0, 122, 255, 0.08); border: 1px solid rgba(0, 122, 255, 0.2); border-radius: 10px; padding: 10px 14px; cursor: pointer; color: var(--text-main); min-height: 44px; }
+        .continue-btn:active { opacity: 0.6; }
+        .continue-btn .cl { font-size: 12px; color: var(--apple-blue); font-weight: 600; display: flex; align-items: center; gap: 6px; }
+        .continue-btn .ct { font-size: 15px; font-weight: 500; width: 100%; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+        /* 侧边栏搜索 */
+        .drawer-search { padding: 10px 16px; border-bottom: 1px solid var(--border-color); position: relative; }
+        .drawer-search input { width: 100%; font-size: 16px; padding: 8px 34px 8px 32px; border-radius: 10px; border: none; background: rgba(118, 118, 128, 0.12); color: var(--text-main); outline: none; -webkit-appearance: none; appearance: none; }
+        .drawer-search .fa-magnifying-glass { position: absolute; left: 27px; top: 50%; transform: translateY(-50%); color: var(--text-secondary); font-size: 13px; pointer-events: none; }
+        .drawer-search .search-clear { position: absolute; right: 16px; top: 50%; transform: translateY(-50%); background: none; border: none; color: var(--text-secondary); min-width: 40px; min-height: 40px; cursor: pointer; }
+        .search-empty { padding: 20px; font-size: 13px; color: var(--text-secondary); text-align: center; }
+        .history-item.search-hit { padding-left: 16px; }
+
+        /* 阅读页顶部：这篇有未保存的草稿 */
+        .draft-bar { max-width: 900px; margin: 0 auto 16px; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; background: rgba(255, 149, 0, 0.12); border: 1px solid rgba(255, 149, 0, 0.35); border-radius: 10px; padding: 6px 6px 6px 12px; font-size: 14px; color: var(--text-main); }
+        .draft-bar .dt { flex: 1 1 160px; min-width: 0; }
+        .draft-bar button { background: none; border: none; color: var(--apple-blue); font-size: 14px; font-weight: 500; min-height: 40px; padding: 0 10px; cursor: pointer; border-radius: 8px; }
+        .draft-bar button.danger { color: var(--apple-red); }
+
     </style>
 </head>
 <body data-theme="light">
@@ -238,14 +353,16 @@
         <div class="header-section header-right">
             <button class="icon-btn hidden" id="btn-read-more" title="更多操作"><i class="fas fa-ellipsis-h"></i></button>
             <button class="icon-btn hidden" id="btn-edit-more" title="编辑选项"><i class="fas fa-ellipsis-h"></i></button>
+            <button class="icon-btn hidden" id="btn-toc-toggle" title="收起目录" aria-label="收起/展开目录"><i class="fas fa-list-ul"></i></button>
             <button class="icon-btn hidden" id="btn-read-copy" title="复制全文"><i class="fas fa-copy"></i></button>
-            <button class="text-btn primary hidden" id="btn-read-edit"><i class="fas fa-edit"></i> 编辑</button>
+            <button class="icon-btn hidden" id="btn-read-download" title="下载为 .md 文件"><i class="fas fa-download"></i></button>
+            <button class="text-btn primary hidden" id="btn-read-edit"><span class="btn-face"><i class="fas fa-edit"></i> 编辑</span></button>
             <button class="icon-btn hidden" id="btn-font-dec" title="缩小字号" style="font-weight:700; font-size:14px;">A-</button>
             <button class="icon-btn hidden" id="btn-font-reset" title="恢复默认字号"><i class="fas fa-rotate-left" style="font-size:0.85em;"></i></button>
             <button class="icon-btn hidden" id="btn-font-inc" title="放大字号" style="font-weight:700; font-size:14px;">A+</button>
             <button class="text-btn hidden" id="btn-home-sample"><i class="fas fa-file-code"></i> 示例</button>
             <button class="text-btn hidden" id="btn-edit-reset">重置</button>
-            <button class="text-btn primary hidden" id="btn-edit-save">保存</button>
+            <button class="text-btn primary hidden" id="btn-edit-save"><span class="btn-face">保存</span></button>
             <button class="icon-btn" id="btn-theme" aria-label="切换主题"><i class="fas fa-moon"></i></button>
         </div>
     </header>
@@ -265,16 +382,22 @@
                         <i class="fas fa-upload"></i> 打开 MD 文件
                         <input type="file" id="file-upload-home" hidden>
                     </label>
+                    <div id="home-continue"></div>
                 </div>
             </div>
   
             <div class="view-layer view-read hidden" id="view-read">
+                <div id="draft-bar-slot"></div>
                 <div class="markdown-container">
                     <div class="markdown-body" id="reader-content"></div>
                 </div>
             </div>
         
-            <div class="view-layer view-edit hidden" id="view-edit">
+            <div class="view-layer view-edit hidden tab-edit" id="view-edit">
+                <div class="edit-tabs"><div class="seg" role="tablist">
+                    <button type="button" class="on" id="tab-edit" role="tab">编辑</button>
+                    <button type="button" id="tab-preview" role="tab">预览</button>
+                </div></div>
                 <div class="edit-pane">
                     <textarea id="editor-textarea" placeholder="在此输入 Markdown..."></textarea>
                 </div>
@@ -285,7 +408,7 @@
         </div>
     </div>
 
-    <button class="fab-toc hidden mobile-only" id="btn-fab-toc" title="打开打开目录"><i class="fas fa-list-ul"></i></button>
+    <button class="fab-toc hidden mobile-only" id="btn-fab-toc" title="打开目录"><i class="fas fa-list-ul"></i></button>
 
     <div class="overlay" id="overlay"></div>
     <div class="drawer" id="drawer">
@@ -302,7 +425,14 @@
                 <i class="fas fa-file-upload"></i> 导入本地文件
                 <input type="file" id="file-upload-drawer" hidden>
             </label>
-            <div id="history-list" style="margin-top: 10px;"></div>
+            <div class="menu-action" id="menu-backup"><i class="fas fa-box-archive"></i> 备份与恢复</div>
+            <input type="file" id="file-restore" hidden>
+            <div class="drawer-search">
+                <i class="fas fa-magnifying-glass"></i>
+                <input type="search" id="drawer-search-input" placeholder="搜索标题或内容" enterkeyhint="search" autocomplete="off">
+                <button class="search-clear hidden" id="drawer-search-clear" aria-label="清除搜索"><i class="fas fa-circle-xmark"></i></button>
+            </div>
+            <div id="history-list"></div>
         </div>
     </div>
 
@@ -312,6 +442,11 @@
         <div class="action-menu-content" id="action-menu-items"></div>
     </div>
     <div id="title-tooltip" class="title-tooltip"></div>
+    <div class="resume-pill" id="resume-pill" role="status">
+        <button type="button" id="resume-go"><i class="fas fa-bookmark"></i> <span id="resume-text">回到上次读到的位置</span></button>
+        <button type="button" class="resume-close" id="resume-close" aria-label="不用了"><i class="fas fa-xmark"></i></button>
+    </div>
+    <div class="toast" id="toast" role="status" aria-live="polite"></div>
 
     <script>
         const { markedHighlight } = globalThis.markedHighlight;
@@ -498,7 +633,11 @@
                 hooks: {
                     preprocess(markdown) { markSrc = String(markdown).replace(/\r\n|\r/g, '\n'); return markdown; },
                     processAllTokens: annotateBlocks,
-                    postprocess: (html) => DOMPurify.sanitize(html, { ADD_ATTR: ['style'] })
+                    // 2026-10-09 加 FORBID_TAGS（跟 markdown-reader 同步）：文档里的 <style> 原来会作用到整个应用
+                    //（一行 body{display:none} 就白屏，Typora / Obsidian 导出的 .md 也常带 <style>）；<form> 能在正文里
+                    // 做出一个提交到外站的假输入框。行内 style="…" 仍然保留，它能做的事由正文容器的 contain:layout 兜住。
+                    // MathJax 自己的样式表是排版时插进 <head> 的，不经过这里，不受影响。
+                    postprocess: (html) => DOMPurify.sanitize(html, { ADD_ATTR: ['style'], FORBID_TAGS: ['style', 'form'] })
                 }
             }
         );
@@ -553,7 +692,7 @@
             mathJaxLoadPromise = new Promise((resolve) => {
                 const script = document.createElement('script');
                 script.id = 'MathJax-script';
-                script.src = 'https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-chtml.js';
+                script.src = 'https://cdn.jsdelivr.net/npm/mathjax@3.2.2/es5/tex-chtml.js';
                 script.onload = () => {
                     if (window.MathJax && window.MathJax.startup && window.MathJax.startup.promise) {
                         window.MathJax.startup.promise.then(resolve);
@@ -585,130 +724,445 @@
             return unique;
         }
 
+        // ================= 核心状态与数据管理 =================
         let currentState = 'home';
+        // 当前打开的文档。它只是 localStorage 里那一条的快照：凡是要改库，一律先重新读最新的库再改（见 mutateDB）
         let currentFile = null;
+        // 进入编辑时的内容：判断「有没有改动」的基准，也是保存时检测「编辑期间别的页面改过这篇」的基准
         let originalContent = '';
-        let sortOrder = localStorage.getItem('md-pro-sort') || 'desc';
-        
-        const defaultDB = { folders: [{ id: 'root', name: '默认文件夹', isOpen: true }], files: [] };
+
+        // 同一个 fjkkx77.github.io 下的姊妹站 markdown-reader 跟本站共用同一个存储：md-pro-db / md-theme / md-font-scale
+        // 两站是同一份。2026-10-09 跟着 markdown-reader 新加的键大多用它的 mdr- 前缀、两站共用（草稿、主题选择、目录收起、
+        // 上次导出时间）；只有「读到哪」「上次看的哪篇」本站单独用 mf- 前缀（见 POS_KEY 那里的说明）。
+        function lsGet(key) { try { return localStorage.getItem(key); } catch (_) { return null; } }
+        function lsSet(key, value) { try { localStorage.setItem(key, value); return true; } catch (_) { return false; } }
+        function lsRemove(key) { try { localStorage.removeItem(key); } catch (_) {} }
+
+        // 排序状态读取 (desc=最新在前, asc=最旧在前)
+        let sortOrder = lsGet('md-pro-sort') || 'desc';
+
+        const DB_KEY = 'md-pro-db';
+        const defaultDB = {
+            folders: [{ id: 'root', name: '默认文件夹', isOpen: true }],
+            files: []
+        };
+        const cloneDefaultDB = () => JSON.parse(JSON.stringify(defaultDB));
 
         // 拼进 innerHTML 的文件名/文件夹名一律先转义：文件名来自用户本机任意 .md
         //（macOS / 安卓 / Linux 的文件名可以带 < >），形如 <img src=x onerror=…>.md 的文件名
-        // 原来在侧边栏和操作菜单里会被当成 HTML 执行（2026-10-07 实测执行 2 次）。
+        // 原来在侧边栏和操作菜单里会被当成 HTML 执行（标题提示框那条路早就用 textContent 了，这两处漏了）。
         function escapeHtml(s) {
             return String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
         }
 
+        // 数据损坏、而且原始数据没能另存成功（空间也满了）时为 true：这时任何保存都会把唯一一份原始数据覆盖掉，
+        // 所以在用户把原始数据下载下来之前，saveDB 一律拒绝。
+        let dbCorruptUnbacked = false;
+        let corruptRaw = '';
+        let corruptBackupKey = 'md-pro-db-corrupt-backup';
+
         function getDB() {
-            let rawStr = localStorage.getItem('md-pro-db');
-            if (!rawStr) return JSON.parse(JSON.stringify(defaultDB));
+            let rawStr = lsGet(DB_KEY);
+            if (!rawStr) { corruptRaw = ''; dbCorruptUnbacked = false; return cloneDefaultDB(); }
+            // 这份损坏内容已经处理过（见下面 catch 里的说明）：不用再花时间解析几 MB 的坏数据
+            if (corruptRaw && rawStr === corruptRaw) return cloneDefaultDB();
             try {
                 let parsed = JSON.parse(rawStr);
+                // 能正常解析了（比如在另一个标签页里修好了）：损坏状态解除，别再拦着保存
+                corruptRaw = ''; dbCorruptUnbacked = false;
                 if (Array.isArray(parsed)) {
-                    let migratedDB = JSON.parse(JSON.stringify(defaultDB));
+                    let migratedDB = cloneDefaultDB();
                     parsed.forEach(f => { f.folderId = 'root'; migratedDB.files.push(f); });
-                    localStorage.setItem('md-pro-db', JSON.stringify(migratedDB));
+                    lsSet(DB_KEY, JSON.stringify(migratedDB));
                     return migratedDB;
                 }
+                if (!parsed || !Array.isArray(parsed.folders) || !Array.isArray(parsed.files)) throw new Error('文档库结构不对');
+                // 数组里混进 null / 非对象（别的版本写坏的、手工改过的）时，渲染侧边栏读 f.id 会抛错、侧边栏整个空白。
+                // 这种条目本来就用不了，读的时候筛掉（下次保存时自然就清掉了）
+                parsed.folders = parsed.folders.filter(f => f && typeof f === 'object' && f.id != null);
+                parsed.files = parsed.files.filter(f => f && typeof f === 'object' && f.id != null);
+                if (!parsed.folders.some(f => f && f.id === 'root')) parsed.folders.unshift({ id: 'root', name: '默认文件夹', isOpen: true });
                 return parsed;
             } catch (e) {
-                // 存的数据解析不了时，原来直接返回空库——下一次任何保存都会把它写回去，所有文档就此消失。
-                // 先把原文另存一份，再提示用户，至少还有得救。
+                // 存的数据解析不了时，原来直接返回空库——下一次任何保存都会把它写回去，
+                // 所有文档就此永久消失。先把原文另存一份，再提示用户，至少还有得救。
+                // 2026-10-09：原来备份没写进去（空间满）也照样提示「已另存」；另外已经有一份旧备份、
+                // 这次损坏的内容跟它不一样时，这次的根本没存。现在按「这份原文到底存没存上」来判断。
+                // 同一份损坏内容只处理一次：getDB 调用得很频繁（侧边栏、搜索、每次保存），原来每调一次都可能再写一份
+                // 带时间戳的整库副本把空间写满；用户下载了原始数据之后，下一次 getDB 又把「没备份」标记打回去，永远存不了。
+                //（「同一份只处理一次」的判断放在 try 前面，见函数开头）
+                let backedUp = false;
                 try {
-                    if (!localStorage.getItem('md-pro-db-corrupt-backup')) localStorage.setItem('md-pro-db-corrupt-backup', rawStr);
-                } catch (_) {}
+                    // 已经有一份内容相同的备份（不管是哪个键）就不再写；记下这份原文实际存在哪个键，提示里要写对
+                    for (let k = 0; k < localStorage.length; k++) {
+                        const key = localStorage.key(k);
+                        if (key && key.startsWith('md-pro-db-corrupt-backup') && localStorage.getItem(key) === rawStr) { backedUp = true; corruptBackupKey = key; break; }
+                    }
+                    if (!backedUp) {
+                        const key = localStorage.getItem('md-pro-db-corrupt-backup') === null ? 'md-pro-db-corrupt-backup' : 'md-pro-db-corrupt-backup-' + Date.now();
+                        localStorage.setItem(key, rawStr);
+                        backedUp = true; corruptBackupKey = key;
+                    }
+                } catch (_) { backedUp = false; }
+                corruptRaw = rawStr;
+                dbCorruptUnbacked = !backedUp;
                 if (!getDB.warned) {
                     getDB.warned = true;
-                    setTimeout(() => alert('本地保存的文档数据损坏，读不出来。原始数据已另存到 localStorage 的 md-pro-db-corrupt-backup，请先别清除浏览器数据。'), 0);
+                    setTimeout(() => warnCorrupt(backedUp), 0);
                 }
-                return JSON.parse(JSON.stringify(defaultDB));
+                return cloneDefaultDB();
             }
         }
 
-        // 返回是否真的存上了。localStorage 一般只有 5MB 左右，存满时 setItem 会抛异常，原来没接住：
-        // 点「保存」界面停在编辑页、毫无提示，像点了没反应，用户以为存好了关掉页面，改动就没了。
-        function saveDB(db) {
+        async function warnCorrupt(backedUp) {
+            const v = await ask({
+                title: '文档数据损坏',
+                message: backedUp
+                    ? `本地保存的文档数据读不出来。原始数据已经另存在浏览器里（localStorage 的 ${corruptBackupKey}），请先别清除浏览器数据；也建议现在把原始数据下载下来保存好。`
+                    : '本地保存的文档数据读不出来，而且浏览器空间不够，没能另存备份。为了不覆盖这份原始数据，下载下来之前暂时不能保存任何修改。',
+                buttons: [{ text: '稍后', value: 'later', style: 'cancel' }, { text: '下载原始数据', value: 'dl', bold: true }]
+            });
+            if (v !== 'dl') return;
+            downloadText(`数学公式阅读器-损坏数据-${dateStamp()}.txt`, corruptRaw, 'text/plain;charset=utf-8');
+            if (!dbCorruptUnbacked) return;
+            // 网页没法知道下载到底成没成（iPhone 上会弹「下载」确认，用户可能点了取消）。没有别的备份时，
+            // 解除保护前要用户亲口确认已经存好——解除之后任何一次保存都会把这份唯一的原始数据覆盖掉。
+            const ok = await ask({
+                title: '原始数据存好了吗？',
+                message: '确认已经下载并存好之后，才会恢复保存功能。恢复之后，这份损坏的原始数据会被新的文档库覆盖。',
+                buttons: [{ text: '还没有', value: false, style: 'cancel', bold: true }, { text: '已经存好', value: true }]
+            });
+            if (ok === true) dbCorruptUnbacked = false;
+        }
+
+        const SAVE_FAIL_EDIT = '浏览器本地存储空间已满（或被禁用）。\n这次的修改还在编辑框里，请先复制出来，再删掉一些不用的文档后重试。';
+        const SAVE_FAIL_GENERIC = '浏览器本地存储空间已满（或被禁用），这次的改动没有存上。\n请删掉一些不用的文档后重试。';
+
+        // 返回是否真的存上了。localStorage 一般只有 5MB 左右，存满时 setItem 会抛 QuotaExceededError，
+        // 原来没接住：点「保存」时异常直接冒出去，界面停在编辑页、什么提示都没有，像是点了没反应。
+        // failMsg 按场景给（原来一律说「修改还在编辑框里」，导入、新建时这句话是错的）。
+        function saveDB(db, failMsg) {
+            if (dbCorruptUnbacked) { warnCorrupt(false); return false; }
             try {
-                localStorage.setItem('md-pro-db', JSON.stringify(db));
+                localStorage.setItem(DB_KEY, JSON.stringify(db));
             } catch (e) {
-                alert('保存失败：浏览器本地存储空间已满（或被禁用）。\n这次的修改还在编辑框里，请先复制出来，再删掉一些不用的文档后重试。');
+                showAlert('保存失败', failMsg || SAVE_FAIL_GENERIC);
                 return false;
             }
-            renderDrawer();
+            renderDrawer(db); // 侧边栏关着时它自己会跳过；把刚存的库传进去，不用再解析一遍
+            maybeRequestPersist();
             return true;
         }
 
+        // 在「此刻最新」的库上改一处再存回去。
+        // 原来侧边栏画出来时把整个库读进内存，之后展开文件夹、改名、置顶、移动、删除、拖动排序都是改这份
+        // 旧副本再整份写回——同时开着两个标签页（或姊妹站 markdown-reader）时，一边随手点一下文件夹，
+        // 就把另一边刚保存的内容、刚新建的文档整份冲掉（审查报告 P1-2）。fn 返回 false 表示不用存。
+        // 存上了返回改好的那个库对象（调用方要读结果时直接用，不用再 getDB 解析一遍整库），没存上返回 false。
+        function mutateDB(fn, failMsg) {
+            const db = getDB();
+            if (fn(db) === false) return false;
+            return saveDB(db, failMsg) ? db : false;
+        }
+
+        function newId() { return Date.now().toString() + Math.random().toString(36).slice(2, 6); }
+
+        // 新建一篇放进默认文件夹，返回存上的那条；没存上返回 null（saveDB 已经弹了提示）
+        function createFile(title, content, failMsg) {
+            const file = { id: newId(), title, content, timestamp: Date.now(), isPinned: false, folderId: 'root' };
+            return mutateDB(db => { db.files.unshift(file); }, failMsg) ? file : null;
+        }
+
+        // 申请「持久存储」：Chrome 等浏览器在空间紧张时就不会自动清掉本站数据。
+        // 能不能豁免 Safari 的「7 天没打开就清空」不确定（WebKit 没写明），所以真正的保险还是「备份与恢复」。
+        // 放在第一次成功保存之后调用（有用户操作在前，Firefox 弹的授权框也不显得突兀），每次打开页面最多一次。
+        function maybeRequestPersist() {
+            if (maybeRequestPersist.done) return;
+            maybeRequestPersist.done = true;
+            try {
+                if (navigator.storage && navigator.storage.persist && navigator.storage.persisted) {
+                    navigator.storage.persisted().then(p => { if (!p) return navigator.storage.persist(); }).catch(() => {});
+                }
+            } catch (_) {}
+        }
+
+        // ================= DOM 元素获取 =================
+        // 侧边栏、首页这些固定元素全部在这里一次取好。原来渲染侧边栏时现查 getElementById('history-list')，
+        // 文档里只要有一个 id="history-list" 的元素（排在侧边栏前面），文件列表就被画进了正文里（P3-12）。
         const vHome = document.getElementById('view-home');
         const vRead = document.getElementById('view-read');
         const vEdit = document.getElementById('view-edit');
-        
+
         const headerUI = {
             btnHamburger: document.getElementById('btn-hamburger'), btnBack: document.getElementById('btn-back'),
             btnTheme: document.getElementById('btn-theme'), btnHomeSample: document.getElementById('btn-home-sample'),
             btnReadCopy: document.getElementById('btn-read-copy'), btnReadEdit: document.getElementById('btn-read-edit'),
+            btnReadDownload: document.getElementById('btn-read-download'), btnTocToggle: document.getElementById('btn-toc-toggle'),
             btnReadMore: document.getElementById('btn-read-more'), btnEditSave: document.getElementById('btn-edit-save'),
             btnEditCancel: document.getElementById('btn-edit-cancel'), btnEditReset: document.getElementById('btn-edit-reset'),
-            btnEditMore: document.getElementById('btn-edit-more'), 
-            headerLogo: document.getElementById('header-logo'), headerTitle: document.getElementById('header-title'),
+            btnEditMore: document.getElementById('btn-edit-more'),
             btnFontDec: document.getElementById('btn-font-dec'), btnFontInc: document.getElementById('btn-font-inc'),
-            btnFontReset: document.getElementById('btn-font-reset')
+            btnFontReset: document.getElementById('btn-font-reset'),
+            headerLogo: document.getElementById('header-logo'),
+            headerTitle: document.getElementById('header-title')
         };
         const overlay = document.getElementById('overlay'); const drawer = document.getElementById('drawer');
+        const drawerContent = drawer.querySelector('.drawer-content');
         const actionMenu = document.getElementById('action-menu'); const actionMenuItems = document.getElementById('action-menu-items');
         const actionMenuOverlay = document.getElementById('action-menu-overlay');
         const titleTooltip = document.getElementById('title-tooltip');
-        
+
         const tocSidebar = document.getElementById('toc-sidebar'); const tocContent = document.getElementById('toc-content');
         const btnFabToc = document.getElementById('btn-fab-toc'); const tocOverlay = document.getElementById('toc-overlay');
         const readerContent = document.getElementById('reader-content'); const editorTextarea = document.getElementById('editor-textarea');
         const editorPreview = document.getElementById('editor-preview');
+        const previewPane = editorPreview.closest('.preview-pane');
         const btnSort = document.getElementById('btn-sort');
+        const historyList = document.getElementById('history-list');
+        const searchInput = document.getElementById('drawer-search-input');
+        const searchClear = document.getElementById('drawer-search-clear');
+        const homeContinue = document.getElementById('home-continue');
+        const draftBarSlot = document.getElementById('draft-bar-slot');
+        const resumePill = document.getElementById('resume-pill');
+        const resumeText = document.getElementById('resume-text');
+        const toastEl = document.getElementById('toast');
+        const tabEditBtn = document.getElementById('tab-edit');
+        const tabPreviewBtn = document.getElementById('tab-preview');
+        const mdStyleLink = document.getElementById('md-style');
+        const hljsStyleLink = document.getElementById('hljs-style');
+        const fileRestoreInput = document.getElementById('file-restore');
 
+        const isMobileWidth = () => window.innerWidth < 768;
+
+        // ================= 页面内弹框（替代 alert / confirm / prompt） =================
+        // 原来 13 处用的是浏览器原生弹框：iPhone 上顶部会显示网址、深色模式下还是白的、复制成功也要点一下「确定」。
+        // ask() 返回 Promise，结果是被点按钮的 value（带输入框时是 { value, text }）。按 Esc 等于点 style:'cancel'
+        // 的那个按钮（没有就是 null），回车等于点 bold 的那个。同一时间只显示一个，后来的排队。
+        const dialogQueue = [];
+        let dialogOpen = false;
+        function ask(opts) {
+            return new Promise(resolve => {
+                dialogQueue.push({ ...opts, resolve });
+                if (!dialogOpen) nextDialog();
+            });
+        }
+        function nextDialog() {
+            const d = dialogQueue.shift();
+            if (!d) { dialogOpen = false; return; }
+            dialogOpen = true;
+            const buttons = d.buttons && d.buttons.length ? d.buttons : [{ text: '好', value: true, bold: true }];
+            const prevFocus = document.activeElement;
+
+            const ov = document.createElement('div'); ov.className = 'dlg-overlay';
+            const box = document.createElement('div'); box.className = 'dlg';
+            box.setAttribute('role', 'alertdialog'); box.setAttribute('aria-modal', 'true');
+            const body = document.createElement('div'); body.className = 'dlg-body';
+            if (d.title) { const t = document.createElement('div'); t.className = 'dlg-title'; t.textContent = d.title; body.appendChild(t); }
+            if (d.message) { const m = document.createElement('div'); m.className = 'dlg-msg'; m.textContent = d.message; body.appendChild(m); }
+            let input = null;
+            if (d.input) {
+                input = document.createElement('input'); input.className = 'dlg-input'; input.type = 'text';
+                input.value = d.input.value || ''; input.placeholder = d.input.placeholder || '';
+                input.setAttribute('enterkeyhint', 'done');
+                body.appendChild(input);
+            }
+            const row = document.createElement('div');
+            row.className = 'dlg-btns' + (buttons.length > 2 ? ' vertical' : '');
+            let finished = false;
+            const finish = (value) => {
+                if (finished) return;
+                finished = true;
+                document.removeEventListener('keydown', onKey, true);
+                ov.classList.remove('show');
+                setTimeout(() => ov.remove(), 200);
+                // 触屏上不把焦点还给编辑框：一还回去键盘就弹出来
+                if (prevFocus && prevFocus.focus && !matchMedia('(pointer: coarse)').matches) { try { prevFocus.focus({ preventScroll: true }); } catch (_) {} }
+                d.resolve(input ? { value, text: input.value } : value);
+                setTimeout(nextDialog, 0);
+            };
+            const btnEls = buttons.map(b => {
+                const el = document.createElement('button');
+                el.type = 'button';
+                el.className = 'dlg-btn' + (b.bold ? ' bold' : '') + (b.style === 'destructive' ? ' destructive' : '');
+                el.textContent = b.text;
+                el.onclick = () => finish(b.value);
+                row.appendChild(el);
+                return el;
+            });
+            const cancelBtn = buttons.find(b => b.style === 'cancel');
+            // 回车 = 加粗的那个；没有加粗的就取第一个不危险的。危险操作（删除、替换）永远不当默认，跟 iOS 一样
+            const defaultBtn = buttons.find(b => b.bold) || buttons.find(b => b.style !== 'destructive') || buttons[0];
+            const onKey = (e) => {
+                if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); finish(cancelBtn ? cancelBtn.value : null); }
+                else if (e.key === 'Enter' && !e.isComposing && (e.target === input || !e.target.closest || !e.target.closest('.dlg-btn'))) { e.preventDefault(); e.stopPropagation(); finish(defaultBtn.value); }
+                else if (e.key === 'Tab') {
+                    // 焦点关在弹框里
+                    const focusables = [input, ...btnEls].filter(Boolean);
+                    const i = focusables.indexOf(document.activeElement);
+                    e.preventDefault();
+                    focusables[(i + (e.shiftKey ? -1 : 1) + focusables.length) % focusables.length].focus();
+                }
+                else if (!box.contains(e.target)) { e.stopPropagation(); }
+            };
+            document.addEventListener('keydown', onKey, true);
+            box.appendChild(body); box.appendChild(row); ov.appendChild(box);
+            document.body.appendChild(ov);
+            void ov.offsetWidth;
+            ov.classList.add('show');
+            if (input) { input.focus(); input.select(); }
+            else { const fb = btnEls[buttons.indexOf(defaultBtn)]; if (fb) fb.focus({ preventScroll: true }); }
+        }
+        function showAlert(title, message) { return ask({ title, message, buttons: [{ text: '好', value: true, bold: true }] }); }
+        async function confirmAsk(title, message, okText = '确定', destructive = false) {
+            const v = await ask({ title, message, buttons: [{ text: '取消', value: false, style: 'cancel' }, { text: okText, value: true, bold: !destructive, style: destructive ? 'destructive' : 'default' }] });
+            return v === true;
+        }
+        // 返回去掉首尾空格的文字；取消或者是空的返回 null
+        async function promptAsk(title, value = '', okText = '确定', placeholder = '') {
+            const r = await ask({ title, input: { value, placeholder }, buttons: [{ text: '取消', value: false, style: 'cancel' }, { text: okText, value: true, bold: true }] });
+            if (!r || r.value !== true) return null;
+            const t = r.text.trim();
+            return t ? t : null;
+        }
+
+        let toastTimer = null;
+        function notify(msg, ms = 1800) {
+            toastEl.textContent = msg;
+            toastEl.classList.add('show');
+            clearTimeout(toastTimer);
+            toastTimer = setTimeout(() => toastEl.classList.remove('show'), ms);
+        }
+
+        // ================= 遮罩层的显示 / 隐藏 =================
+        // 原来关上时用 setTimeout 300ms 再把遮罩 display:none，开的时候不取消这个计时——
+        // 关上后 0.3 秒内再打开，遮罩会被那个迟到的计时藏掉，点空白处就关不掉了（P3-11）。
+        function showLayer(el) {
+            clearTimeout(el._hideTimer);
+            el.style.display = 'block';
+            void el.offsetWidth;
+            el.style.opacity = '1';
+        }
+        function hideLayer(el) {
+            el.style.opacity = '0';
+            clearTimeout(el._hideTimer);
+            el._hideTimer = setTimeout(() => { el.style.display = 'none'; }, 300);
+        }
+
+        // ================= 小工具 =================
+        function dateStamp() {
+            const d = new Date();
+            const p = n => String(n).padStart(2, '0');
+            return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
+        }
+        function fmtTime(ts) {
+            const d = new Date(ts);
+            const p = n => String(n).padStart(2, '0');
+            const today = new Date();
+            const sameDay = d.toDateString() === today.toDateString();
+            return (sameDay ? '今天' : `${d.getMonth() + 1}月${d.getDate()}日`) + ` ${p(d.getHours())}:${p(d.getMinutes())}`;
+        }
+        // 把文字下载成文件。iPhone Safari 13 起支持 a[download]，会弹出「下载」确认
+        function downloadText(filename, text, mime) {
+            const blob = new Blob([text], { type: mime });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url; a.download = filename; a.rel = 'noopener';
+            document.body.appendChild(a); a.click(); a.remove();
+            setTimeout(() => URL.revokeObjectURL(url), 60000);
+        }
+        // Windows / macOS 文件名里不允许的字符换成下划线
+        function safeFileName(name) {
+            const s = String(name || '').replace(/[\\/:*?"<>|\u0000-\u001f]/g, '_').replace(/^\.+/, '').trim();
+            return (s || '未命名文档').slice(0, 120);
+        }
+        function downloadDoc(file) { downloadText(safeFileName(file.title) + '.md', file.content, 'text/markdown;charset=utf-8'); }
+
+        // ================= UI 状态机控制 =================
         // 顶栏按钮、悬浮目录按钮、目录侧栏这些「外壳」：只跟当前状态和屏幕宽度有关，跟内容无关。
         // 单独拆出来，是因为窗口宽度跨过 768 断点时只该刷新外壳（见下面的 resize 监听）。
         function applyChrome(state) {
-            const isMobile = window.innerWidth < 768;
+            const isMobile = isMobileWidth();
             btnFabToc.classList.add('hidden');
             Object.values(headerUI).forEach(el => { if(el && el.id !== 'btn-hamburger') el.classList.add('hidden'); });
+
             if (state === 'home') {
                 headerUI.headerLogo.classList.remove('hidden');
                 headerUI.btnHomeSample.classList.remove('hidden'); headerUI.btnTheme.classList.remove('hidden');
                 tocSidebar.classList.add('collapsed');
             } else if (state === 'read') {
                 headerUI.btnBack.classList.remove('hidden');
-                headerUI.headerTitle.classList.remove('hidden'); headerUI.headerTitle.innerText = currentFile.title;
+                headerUI.headerTitle.classList.remove('hidden'); headerUI.headerTitle.textContent = currentFile.title;
                 if(isMobile) {
-                    headerUI.btnReadMore.classList.remove('hidden'); btnFabToc.classList.remove('hidden');
+                    headerUI.btnReadMore.classList.remove('hidden');
+                    btnFabToc.classList.remove('hidden');
                 } else {
-                    headerUI.btnReadCopy.classList.remove('hidden'); headerUI.btnReadEdit.classList.remove('hidden'); headerUI.btnTheme.classList.remove('hidden');
-                    headerUI.btnFontDec.classList.remove('hidden'); headerUI.btnFontReset.classList.remove('hidden'); headerUI.btnFontInc.classList.remove('hidden');
-                    tocSidebar.classList.remove('collapsed');
+                    headerUI.btnReadCopy.classList.remove('hidden'); headerUI.btnReadDownload.classList.remove('hidden');
+                    headerUI.btnReadEdit.classList.remove('hidden'); headerUI.btnTheme.classList.remove('hidden');
+                    headerUI.btnFontDec.classList.remove('hidden'); headerUI.btnFontInc.classList.remove('hidden');
+                    headerUI.btnFontReset.classList.remove('hidden');
                 }
+                updateTocLayout();
             } else if (state === 'edit') {
-                headerUI.headerTitle.classList.remove('hidden'); headerUI.headerTitle.innerText = "编辑: " + currentFile.title;
+                headerUI.headerTitle.classList.remove('hidden'); headerUI.headerTitle.textContent = "编辑: " + currentFile.title;
                 if(isMobile) {
-                    headerUI.btnBack.classList.remove('hidden'); headerUI.btnEditMore.classList.remove('hidden');
+                    headerUI.btnBack.classList.remove('hidden');
+                    headerUI.btnEditMore.classList.remove('hidden');
                 } else {
-                    headerUI.btnEditCancel.classList.remove('hidden'); headerUI.btnEditReset.classList.remove('hidden');
+                    headerUI.btnEditCancel.classList.remove('hidden');
+                    headerUI.btnEditReset.classList.remove('hidden');
                     headerUI.btnEditSave.classList.remove('hidden'); headerUI.btnTheme.classList.remove('hidden');
                 }
                 tocSidebar.classList.add('collapsed');
             }
         }
 
+        // 阅读区「上一次显示的是哪篇」：从编辑页回来还是同一篇时保留原来的滚动位置；换了一篇就从头显示
+        //（原来换文档会沿用上一篇的滚动位置，一打开就在中间某处，P2-5）。
+        let lastReadFileId = null, lastReadScroll = 0;
+
         async function switchState(newState) {
+            const prevState = currentState;
+            if (prevState === 'read') { saveReadPos(); lastReadScroll = vRead.scrollTop; }
+            // 离开编辑页（包括直接换到另一篇的编辑页）就删掉刚才那篇的草稿：能走到这里的出口都已经有了结论——
+            // 保存了、点了放弃、在 confirmLeaveEdit 里选了「不保存」、删除了这篇，或者根本没改。
+            // 草稿只在「人还在编辑页」或「页面被关掉 / 杀掉」时才需要留着，那两种情况都不会走到这里。
+            // （选「不保存」后又半路放弃的，人还在编辑页，草稿也就还在。）
+            if (prevState === 'edit' && editingId) { clearOwnDraft(editingId); editingId = null; }
+            if (prevState === 'edit') { clearTimeout(previewTimer); previewDirty = false; } // 离开编辑页：还没到点的预览渲染作废
+            hideResumePill();
+            disablePosSave();
             currentState = newState;
             vHome.classList.add('hidden'); vRead.classList.add('hidden'); vEdit.classList.add('hidden');
             ({ home: vHome, read: vRead, edit: vEdit })[newState].classList.remove('hidden');
             applyChrome(newState);
-            if (newState === 'read') {
-                if (await renderMarkdown(currentFile.content, readerContent)) generateTOC();
+
+            if (newState === 'home') {
+                renderHomeContinue();
+            } else if (newState === 'read') {
+                const sameDoc = currentFile.id === lastReadFileId;
+                lastReadFileId = currentFile.id;
+                lsSet(LAST_DOC_KEY, currentFile.id);
+                renderDraftBar();
+                if (!(await renderMarkdown(currentFile.content, readerContent))) return;
+                if (currentState !== 'read') return;
+                generateTOC();
+                if (sameDoc && prevState === 'edit') vRead.scrollTop = lastReadScroll;
+                else { vRead.scrollTop = 0; offerResume(); }
+                updateTocActive();
+                enablePosSaveSoon();
             } else if (newState === 'edit') {
+                editingId = currentFile.id;
                 originalContent = currentFile.content;
-                editorTextarea.value = currentFile.content; await renderMarkdown(currentFile.content, editorPreview);
+                editorTextarea.value = currentFile.content;
+                editorTextarea.scrollTop = 0; previewPane.scrollTop = 0;
+                setEditTab('edit', false);
+                await restoreDraftIfAny();
+                previewDirty = true;
+                if (previewVisible()) await flushPreview();
             }
         }
 
+        // ================= Action Sheet (底部悬浮菜单) =================
         function showActionMenu(items) {
             actionMenuItems.innerHTML = '';
             items.forEach(item => {
@@ -716,39 +1170,86 @@
                 div.className = `action-item ${item.danger ? 'danger' : ''} ${item.success ? 'success' : ''} ${item.isTitle ? 'title' : ''}`;
                 // text 里可能拼着文件名/文件夹名，一律转义；icon 是代码里写死的类名
                 div.innerHTML = item.isTitle ? escapeHtml(item.text) : `<i class="${item.icon}"></i> ${escapeHtml(item.text)}`;
-                if (!item.isTitle) { div.onclick = () => { closeActionMenu(); item.action(); }; }
+                if (!item.isTitle) {
+                    div.onclick = () => { closeActionMenu(); item.action(); };
+                }
                 actionMenuItems.appendChild(div);
             });
-            actionMenuOverlay.style.display = 'block'; setTimeout(() => { actionMenuOverlay.style.opacity = '1'; }, 10);
+            showLayer(actionMenuOverlay);
             actionMenu.classList.add('show');
         }
 
-        function closeActionMenu() { actionMenuOverlay.style.opacity = '0'; actionMenu.classList.remove('show'); setTimeout(() => { actionMenuOverlay.style.display = 'none'; }, 300); }
+        function closeActionMenu() {
+            hideLayer(actionMenuOverlay);
+            actionMenu.classList.remove('show');
+        }
         actionMenuOverlay.onclick = closeActionMenu;
 
-        btnSort.innerHTML = sortOrder === 'desc' ? '<i class="fas fa-sort-amount-down"></i>' : '<i class="fas fa-sort-amount-up"></i>';
+        // ================= 侧边栏文件系统 (文件夹渲染与拖拽核心逻辑) =================
+        btnSort.innerHTML = sortOrder === 'desc' ?
+        '<i class="fas fa-sort-amount-down"></i>' : '<i class="fas fa-sort-amount-up"></i>';
         btnSort.onclick = () => {
-            sortOrder = sortOrder === 'desc' ? 'asc' : 'desc'; localStorage.setItem('md-pro-sort', sortOrder);
-            btnSort.innerHTML = sortOrder === 'desc' ? '<i class="fas fa-sort-amount-down"></i>' : '<i class="fas fa-sort-amount-up"></i>'; renderDrawer();
+            sortOrder = sortOrder === 'desc' ? 'asc' : 'desc';
+            lsSet('md-pro-sort', sortOrder);
+            btnSort.innerHTML = sortOrder === 'desc' ? '<i class="fas fa-sort-amount-down"></i>' : '<i class="fas fa-sort-amount-up"></i>';
+            renderDrawer();
         };
 
-        function renderDrawer() {
-            let db = getDB();
-            const list = document.getElementById('history-list'); list.innerHTML = '';
-            const rootFolder = db.folders.find(f => f.id === 'root'); const customFolders = db.folders.filter(f => f.id !== 'root');
-            const pinnedFolders = customFolders.filter(f => f.isPinned); const unpinnedFolders = customFolders.filter(f => !f.isPinned);
+        let searchQuery = '';
+        let folderDragging = false;      // 文件夹拖动进行中：别的标签页改了库也先不重画侧边栏，免得拖到一半元素没了
+        let suppressFolderClick = false; // 长按拖动刚结束：随后那一下 click 不算「展开/收起文件夹」
+        const coarsePointer = matchMedia('(pointer: coarse)').matches;
+
+        // 一个文件条目（文件夹里、搜索结果里共用）
+        function buildFileItem(file, extraLine) {
+            const item = document.createElement('div'); item.className = 'history-item' + (extraLine != null ? ' search-hit' : '');
+            const pinIcon = file.isPinned ? `<i class="fas fa-thumbtack" style="color:var(--apple-blue); margin-right:6px; font-size:12px; flex-shrink:0;"></i>` : '';
+            item.innerHTML = `
+                <div class="history-info">
+                    <span class="history-title">${pinIcon}<span class="history-name">${escapeHtml(file.title)}</span></span>
+                    ${extraLine != null ? `<span class="history-snippet">${escapeHtml(extraLine)}</span>` : ''}
+                    <span class="history-date">${new Date(file.timestamp).toLocaleString()}</span>
+                </div>
+                <button class="history-more-btn" aria-label="更多操作"><i class="fas fa-ellipsis-h"></i></button>
+            `;
+            item.querySelector('.history-info').onclick = () => openDoc(file.id);
+            item.querySelector('.history-more-btn').onclick = (e) => { e.stopPropagation(); showFileMenu(file.id); };
+            return item;
+        }
+
+        // 侧边栏关着时一律不画（打开时 openDrawer 会先把 drawerOpen 置真再画）：每画一次都要把整个库重新解析一遍，
+        // 保存、别的标签页改库（storage 事件）都会来调这里，关着时画了也看不见。
+        // dbIn：调用方手里已经有最新的库（比如刚存完）就传进来，省一次整库解析
+        function renderDrawer(dbIn) {
+            if (!drawerOpen) return;
+            let db = dbIn || getDB();
+            historyList.innerHTML = '';
+            if (searchQuery) { renderSearchResults(db); return; }
+
+            // 拆分文件夹分类，保证：默认文件夹 -> 置顶文件夹 -> 普通文件夹
+            const rootFolder = db.folders.find(f => f.id === 'root');
+            const customFolders = db.folders.filter(f => f.id !== 'root');
+            const pinnedFolders = customFolders.filter(f => f.isPinned);
+            const unpinnedFolders = customFolders.filter(f => !f.isPinned);
             const renderFolders = [rootFolder, ...pinnedFolders, ...unpinnedFolders].filter(Boolean);
 
             renderFolders.forEach(folder => {
-                const group = document.createElement('div'); group.className = `folder-group ${folder.isOpen ? 'open' : ''}`; group.dataset.id = folder.id;
-                const header = document.createElement('div'); header.className = 'folder-header';
+                const group = document.createElement('div');
+                group.className = `folder-group ${folder.isOpen ? 'open' : ''}`;
+                group.dataset.id = folder.id;
+
+                const header = document.createElement('div');
+                header.className = 'folder-header';
+
                 const pinIconStr = folder.isPinned ? 'fa-unlink' : 'fa-thumbtack';
                 const pinStyleStr = folder.isPinned ? 'style="color:var(--apple-blue)"' : '';
                 const pinBtnHtml = folder.id !== 'root' ? `<button class="folder-btn pin-folder-btn" title="${folder.isPinned ? '取消置顶' : '置顶'}"><i class="fas ${pinIconStr}" ${pinStyleStr}></i></button>` : '';
 
                 header.innerHTML = `
                     <div class="folder-info">
-                        <i class="fas fa-chevron-right"></i> <i class="fas fa-folder folder-icon"></i> <span>${escapeHtml(folder.name)}</span>
+                        <i class="fas fa-chevron-right"></i>
+                        <i class="fas fa-folder folder-icon"></i>
+                        <span class="folder-name">${escapeHtml(folder.name)}</span>
                     </div>
                     <div class="folder-actions">
                         <button class="folder-btn rename-btn" title="重命名"><i class="fas fa-pen"></i></button>
@@ -756,134 +1257,910 @@
                         ${folder.id !== 'root' ? `<button class="folder-btn del-folder-btn" title="删除"><i class="fas fa-trash-alt"></i></button>` : ''}
                     </div>
                 `;
-                header.querySelector('.folder-info').onclick = () => { folder.isOpen = !folder.isOpen; saveDB(db); };
-                header.querySelector('.rename-btn').onclick = (e) => { e.stopPropagation(); let newName = prompt("重命名文件夹：", folder.name); if (newName && newName.trim() !== '') { folder.name = newName.trim(); saveDB(db); } };
+                // 下面所有操作都只记着文件夹 id，动手时在最新的库上找到它再改（见 mutateDB）
+                const fid = folder.id;
+                header.querySelector('.folder-info').onclick = () => {
+                    if (suppressFolderClick) return;
+                    mutateDB(db => { const f = db.folders.find(x => x.id === fid); if (!f) return false; f.isOpen = !f.isOpen; });
+                };
+                header.querySelector('.rename-btn').onclick = async (e) => {
+                    e.stopPropagation();
+                    const newName = await promptAsk('重命名文件夹', folder.name, '完成');
+                    if (newName) mutateDB(db => { const f = db.folders.find(x => x.id === fid); if (!f) return false; f.name = newName; });
+                };
+
                 if (folder.id !== 'root') {
-                    header.querySelector('.pin-folder-btn').onclick = (e) => { e.stopPropagation(); folder.isPinned = !folder.isPinned; saveDB(db); };
-                    header.querySelector('.del-folder-btn').onclick = (e) => {
-                        e.stopPropagation(); const folderFiles = db.files.filter(f => f.folderId === folder.id);
-                        if (folderFiles.length > 0) {
-                            if (confirm(`文件夹 [${folder.name}] 中包含 ${folderFiles.length} 个文件。\n删除后这些文件将被移动到 [默认文件夹] 中，是否继续？`)) { db.files.forEach(f => { if(f.folderId === folder.id) f.folderId = 'root'; }); db.folders = db.folders.filter(f => f.id !== folder.id); saveDB(db); }
-                        } else { if (confirm(`确定删除空文件夹 [${folder.name}] 吗？`)) { db.folders = db.folders.filter(f => f.id !== folder.id); saveDB(db); } }
+                    // 置顶逻辑
+                    header.querySelector('.pin-folder-btn').onclick = (e) => {
+                        e.stopPropagation();
+                        mutateDB(db => { const f = db.folders.find(x => x.id === fid); if (!f) return false; f.isPinned = !f.isPinned; });
                     };
-                    group.draggable = true;
-                    group.addEventListener('dragstart', (e) => { e.dataTransfer.setData('text/plain', folder.id); group.classList.add('dragging'); });
-                    group.addEventListener('dragend', () => { group.classList.remove('dragging'); document.querySelectorAll('.folder-group').forEach(el => el.classList.remove('drag-over')); });
-                    group.addEventListener('dragover', (e) => { e.preventDefault(); const draggingGroup = document.querySelector('.dragging'); if (draggingGroup && draggingGroup !== group && draggingGroup.dataset.id !== 'root') { group.classList.add('drag-over'); } });
-                    group.addEventListener('dragleave', () => { group.classList.remove('drag-over'); });
-                    group.addEventListener('drop', (e) => {
-                        e.preventDefault(); group.classList.remove('drag-over'); const draggedId = e.dataTransfer.getData('text/plain');
-                        if (!draggedId || draggedId === folder.id || draggedId === 'root') return;
-                        let draggedIndex = db.folders.findIndex(f => f.id === draggedId); let targetIndex = db.folders.findIndex(f => f.id === folder.id);
-                        if (draggedIndex > -1 && targetIndex > -1) { const [draggedFolder] = db.folders.splice(draggedIndex, 1); db.folders.splice(targetIndex, 0, draggedFolder); saveDB(db); }
-                    });
+
+                    // 删除逻辑
+                    header.querySelector('.del-folder-btn').onclick = async (e) => {
+                        e.stopPropagation();
+                        const count = getDB().files.filter(f => f.folderId === fid).length;
+                        const ok = count > 0
+                            ? await confirmAsk(`删除文件夹「${folder.name}」？`, `里面的 ${count} 个文件会移到「默认文件夹」，不会被删掉。`, '删除', true)
+                            : await confirmAsk(`删除空文件夹「${folder.name}」？`, '', '删除', true);
+                        if (!ok) return;
+                        mutateDB(db => {
+                            db.files.forEach(f => { if (f.folderId === fid) f.folderId = 'root'; });
+                            db.folders = db.folders.filter(f => f.id !== fid);
+                        });
+                    };
+
+                    // === 自定义文件夹拖拽排序逻辑 ===
+                    // 电脑上用鼠标拖（HTML5 拖放）；触屏上 HTML5 拖放靠不住（iPhone 上基本不触发），改成长按拖动。
+                    if (!coarsePointer) {
+                        group.draggable = true;
+                        group.addEventListener('dragstart', (e) => {
+                            e.dataTransfer.setData('text/plain', fid);
+                            group.classList.add('dragging');
+                            folderDragging = true;
+                        });
+                        group.addEventListener('dragend', () => {
+                            group.classList.remove('dragging');
+                            folderDragging = false;
+                            historyList.querySelectorAll('.folder-group').forEach(el => el.classList.remove('drag-before', 'drag-after'));
+                        });
+                        group.addEventListener('dragover', (e) => {
+                            e.preventDefault();
+                            const draggingGroup = historyList.querySelector('.folder-group.dragging');
+                            if (draggingGroup && draggingGroup !== group && draggingGroup.dataset.id !== 'root') {
+                                const after = dropAfter(draggingGroup, group);
+                                group.classList.toggle('drag-after', after);
+                                group.classList.toggle('drag-before', !after);
+                            }
+                        });
+                        group.addEventListener('dragleave', () => {
+                            group.classList.remove('drag-before', 'drag-after');
+                        });
+                        group.addEventListener('drop', (e) => {
+                            e.preventDefault();
+                            e.stopPropagation(); // 别让全局的「拖入文件」处理再接一次
+                            group.classList.remove('drag-before', 'drag-after');
+                            const draggingGroup = historyList.querySelector('.folder-group.dragging');
+                            const draggedId = e.dataTransfer.getData('text/plain');
+                            if (!draggingGroup || !draggedId || draggedId === fid || draggedId === 'root') return;
+                            reorderFolder(draggedId, fid, dropAfter(draggingGroup, group));
+                        });
+                    }
+                    enableTouchReorder(group, header, fid);
                 }
 
-                const filesContainer = document.createElement('div'); filesContainer.className = 'folder-files';
+                const filesContainer = document.createElement('div');
+                filesContainer.className = 'folder-files';
+
                 let folderFiles = db.files.filter(f => f.folderId === folder.id);
+                // === 核心排序逻辑 ===
                 folderFiles.sort((a, b) => {
-                    if (a.isPinned && !b.isPinned) return -1; if (!a.isPinned && b.isPinned) return 1;
+                    if (a.isPinned && !b.isPinned) return -1;
+                    if (!a.isPinned && b.isPinned) return 1;
                     return sortOrder === 'desc' ? b.timestamp - a.timestamp : a.timestamp - b.timestamp;
                 });
-                if (folderFiles.length === 0) { filesContainer.innerHTML = `<div style="padding: 10px 16px 10px 36px; font-size:12px; color:var(--text-secondary);">空文件夹</div>`; }
 
-                folderFiles.forEach(file => {
-                    const item = document.createElement('div'); item.className = 'history-item';
-                    const pinIcon = file.isPinned ? `<i class="fas fa-thumbtack" style="color:var(--apple-blue); margin-right:6px; font-size:12px;"></i>` : '';
-                    item.innerHTML = `
-                        <div class="history-info">
-                            <span class="history-title">${pinIcon}${escapeHtml(file.title)}</span>
-                            <span class="history-date">${new Date(file.timestamp).toLocaleString()}</span>
-                        </div>
-                        <button class="history-more-btn"><i class="fas fa-ellipsis-h"></i></button>
-                    `;
-                    item.querySelector('.history-info').onclick = () => { currentFile = file; closeDrawer(); switchState('read'); };
-                    item.querySelector('.history-more-btn').onclick = (e) => {
-                        e.stopPropagation();
-                        showActionMenu([
-                            { text: `对 "${file.title}" 进行操作`, isTitle: true },
-                            { text: '重命名文档', icon: 'fas fa-pen', action: () => {
-                                let newTitle = prompt("重命名文档：", file.title);
-                                if (newTitle && newTitle.trim() !== '') { file.title = newTitle.trim(); saveDB(db); if (currentFile && currentFile.id === file.id) { currentFile.title = file.title; let headerTitleEl = document.getElementById('header-title'); if (headerTitleEl) { headerTitleEl.innerText = currentState === 'edit' ? "编辑: " + file.title : file.title; } } }
-                            }},
-                            { text: file.isPinned ? '取消置顶' : '置顶文档', icon: `fas ${file.isPinned ? 'fa-unlink' : 'fa-thumbtack'}`, action: () => { file.isPinned = !file.isPinned; saveDB(db); }},
-                            { text: '移动到...', icon: 'fas fa-exchange-alt', action: () => {
-                                let moveOptions = [{ text: '选择目标文件夹', isTitle: true }];
-                                db.folders.forEach(targetFolder => { if (targetFolder.id !== file.folderId) { moveOptions.push({ text: targetFolder.name, icon: 'fas fa-folder', action: () => { file.folderId = targetFolder.id; targetFolder.isOpen = true; saveDB(db); } }); } });
-                                setTimeout(() => showActionMenu(moveOptions), 350); 
-                            }},
-                            { text: '删除文档', icon: 'fas fa-trash-alt', danger: true, action: () => { if(confirm(`确定删除文档 "${file.title}" 吗？`)) { db.files = db.files.filter(f => f.id !== file.id); saveDB(db); if(currentFile && currentFile.id === file.id) { switchState('home'); if(window.innerWidth < 768) closeDrawer(); } } } }
-                        ]);
-                    };
-                    filesContainer.appendChild(item);
-                });
-                group.appendChild(header); group.appendChild(filesContainer); list.appendChild(group);
+                if (folderFiles.length === 0) {
+                    filesContainer.innerHTML = `<div style="padding: 10px 16px 10px 36px; font-size:12px; color:var(--text-secondary);">空文件夹</div>`;
+                }
+
+                folderFiles.forEach(file => filesContainer.appendChild(buildFileItem(file)));
+
+                group.appendChild(header); group.appendChild(filesContainer); historyList.appendChild(group);
             });
         }
 
-        document.getElementById('btn-new-folder').onclick = () => { let name = prompt("请输入新文件夹名称："); if (name && name.trim() !== '') { let db = getDB(); db.folders.push({ id: 'folder_' + Date.now(), name: name.trim(), isOpen: true, isPinned: false }); saveDB(db); } };
-        let tooltipTimer;
-        const toggleTitleTooltip = () => { if (titleTooltip.classList.contains('show')) { titleTooltip.classList.remove('show'); clearTimeout(tooltipTimer); return; } titleTooltip.innerText = currentFile.title; titleTooltip.classList.add('show'); clearTimeout(tooltipTimer); tooltipTimer = setTimeout(() => { titleTooltip.classList.remove('show'); }, 3000); };
-        // 双击标题回到顶部（仅阅读视图）。窗口内的第二击算双击，窗口外照旧走 tooltip toggle。
-        // 双击时不撤销已弹出的 tooltip——"弹出后被瞬间抹掉"才是刺眼的那一闪，让它自然淡出就
-        // 只是一次正常显示，于是单击不需要任何淡入延迟（延迟期间画面毫无变化，点下去像没反应）。
-        // 停留时长按回顶动画取整，滚动停下时它也差不多淡完。
-        const TITLE_DBLCLICK_MS = 300, DBL_TOOLTIP_LINGER_MS = 900;
-        let titleClickTimer = null;
-        headerUI.headerTitle.onclick = () => {
-            if (!currentFile) return;
-            if (currentState !== 'read') { toggleTitleTooltip(); return; }   // 编辑模式行为完全不变
-            if (titleClickTimer) {                                           // 窗口内的第二击 → 双击
-                clearTimeout(titleClickTimer); titleClickTimer = null;
-                clearTimeout(tooltipTimer);
-                tooltipTimer = setTimeout(() => { titleTooltip.classList.remove('show'); }, DBL_TOOLTIP_LINGER_MS);
-                vRead.scrollTo({ top: 0, behavior: 'smooth' });              // 滚动容器是 #view-read，不是 window
+        // 侧边栏搜索：标题或内容里包含关键词（不分大小写）。标题命中的排前面。
+        function renderSearchResults(db) {
+            // 用不分大小写的正则直接在原文里找，位置就是原文的位置。原来在 toLowerCase() 之后的文字里找、再拿位置去切原文，
+            // 有的字符转小写后长度会变（如土耳其文的 İ），摘要会切歪。
+            const re = new RegExp(searchQuery.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'iu');
+            const findCI = (text) => { const m = re.exec(text); return m ? { index: m.index, len: m[0].length } : null; };
+            const folderName = id => (db.folders.find(f => f.id === id) || {}).name || '默认文件夹';
+            const hits = [];
+            db.files.forEach(file => {
+                const title = String(file.title || ''), content = String(file.content || '');
+                const inTitle = !!findCI(title);
+                const m = findCI(content);
+                if (!inTitle && !m) return;
+                let line = folderName(file.folderId);
+                if (m) {
+                    const start = Math.max(0, m.index - 12);
+                    line += ' · ' + (start > 0 ? '…' : '') + content.slice(start, m.index + m.len + 30).replace(/\s+/g, ' ');
+                }
+                hits.push({ file, inTitle, line });
+            });
+            hits.sort((a, b) => (b.inTitle - a.inTitle) || (b.file.timestamp - a.file.timestamp));
+            if (!hits.length) {
+                const empty = document.createElement('div'); empty.className = 'search-empty';
+                empty.textContent = `没有找到包含「${searchQuery}」的文档`;
+                historyList.appendChild(empty);
                 return;
             }
-            toggleTitleTooltip();                                            // 第一击照常，零延迟
+            hits.forEach(h => historyList.appendChild(buildFileItem(h.file, h.line)));
+        }
+        // 打字停顿 150ms 再搜：每搜一次要把整个库解析一遍、再逐篇查全文，库接近 5MB 时手机上每个按键都会卡
+        let searchTimer = null;
+        searchInput.addEventListener('input', () => {
+            searchClear.classList.toggle('hidden', !searchInput.value);
+            clearTimeout(searchTimer);
+            searchTimer = setTimeout(() => { searchQuery = searchInput.value.trim(); renderDrawer(); }, 150);
+        });
+        searchClear.onclick = () => {
+            clearTimeout(searchTimer);
+            searchInput.value = ''; searchQuery = '';
+            searchClear.classList.add('hidden');
+            renderDrawer();
+            searchInput.focus();
+        };
+
+        // 拖动方向：被拖的在目标上面（往下拖）→ 插到目标后面；反之插到前面。蓝线画在对应的一侧。
+        // 原来蓝线一律画在目标上方，往下拖时实际却插到了后面（P3-18）。
+        function dropAfter(draggedGroup, targetGroup) {
+            const groups = Array.from(historyList.children);
+            return groups.indexOf(draggedGroup) < groups.indexOf(targetGroup);
+        }
+        function reorderFolder(draggedId, targetId, after) {
+            if (draggedId === targetId || draggedId === 'root' || targetId === 'root') return;
+            mutateDB(db => {
+                const from = db.folders.findIndex(f => f.id === draggedId);
+                if (from < 0 || !db.folders.some(f => f.id === targetId)) return false;
+                const [moved] = db.folders.splice(from, 1);
+                const to = db.folders.findIndex(f => f.id === targetId);
+                // 置顶的文件夹总排在普通文件夹前面：拖进置顶区就跟着置顶，拖出来就取消置顶，不然松手后看起来没动
+                moved.isPinned = !!db.folders[to].isPinned;
+                db.folders.splice(after ? to + 1 : to, 0, moved);
+            });
+        }
+
+        // 触屏：在文件夹标题上按住 0.45 秒（手指没动）→ 拎起来跟着手指走 → 松手放到蓝线处。
+        // 按住期间手指一动就算滚动，不拎起。
+        function enableTouchReorder(group, header, fid) {
+            let timer = null, startX = 0, startY = 0, dragging = false, target = null, after = false;
+            const clearMarks = () => { if (target) target.classList.remove('drag-before', 'drag-after'); };
+            header.addEventListener('touchstart', (e) => {
+                if (e.touches.length !== 1 || e.target.closest('.folder-btn')) return;
+                startX = e.touches[0].clientX; startY = e.touches[0].clientY;
+                clearTimeout(timer);
+                timer = setTimeout(() => {
+                    timer = null; dragging = true; folderDragging = true; suppressFolderClick = true;
+                    group.classList.add('touch-dragging');
+                    if (navigator.vibrate) { try { navigator.vibrate(10); } catch (_) {} }
+                }, 450);
+            }, { passive: true });
+            header.addEventListener('touchmove', (e) => {
+                const t = e.touches[0];
+                if (timer) {
+                    if (Math.hypot(t.clientX - startX, t.clientY - startY) > 8) { clearTimeout(timer); timer = null; }
+                    return;
+                }
+                if (!dragging) return;
+                e.preventDefault(); // 拎起之后这一路手势不再滚动侧边栏
+                group.style.transform = `translateY(${t.clientY - startY}px)`;
+                // 先让自己不接收点击，elementFromPoint 才能看到手指下面的那个文件夹
+                group.style.pointerEvents = 'none';
+                const under = document.elementFromPoint(t.clientX, t.clientY);
+                group.style.pointerEvents = '';
+                const tg = under && under.closest('.folder-group');
+                clearMarks(); target = null;
+                if (tg && tg !== group && historyList.contains(tg) && tg.dataset.id !== 'root') {
+                    target = tg; after = dropAfter(group, tg);
+                    tg.classList.add(after ? 'drag-after' : 'drag-before');
+                }
+                // 拖到侧边栏上下边缘时自动滚一点
+                const r = drawerContent.getBoundingClientRect();
+                if (t.clientY < r.top + 40) drawerContent.scrollTop -= 8;
+                else if (t.clientY > r.bottom - 40) drawerContent.scrollTop += 8;
+            }, { passive: false });
+            const end = () => {
+                clearTimeout(timer); timer = null;
+                if (!dragging) return;
+                dragging = false; folderDragging = false;
+                group.classList.remove('touch-dragging'); group.style.transform = '';
+                const tgt = target; clearMarks(); target = null;
+                setTimeout(() => { suppressFolderClick = false; }, 400);
+                if (tgt) reorderFolder(fid, tgt.dataset.id, after);
+            };
+            header.addEventListener('touchend', end);
+            header.addEventListener('touchcancel', end);
+            // 安卓长按会弹系统菜单，拖动时不要它
+            header.addEventListener('contextmenu', (e) => { if (dragging || suppressFolderClick) e.preventDefault(); });
+        }
+
+        // 文件的「…」菜单。只记着 id，每个动作都在最新的库上找到它再改。
+        function showFileMenu(id) {
+            const file = getDB().files.find(f => f.id === id);
+            if (!file) { renderDrawer(); return; }
+            showActionMenu([
+                { text: `对 "${file.title}" 进行操作`, isTitle: true },
+                { text: '重命名文档', icon: 'fas fa-pen', action: () => renameFile(id) },
+                { text: '下载为 .md 文件', icon: 'fas fa-download', action: () => { const f = getDB().files.find(x => x.id === id); if (f) downloadDoc(f); } },
+                { text: file.isPinned ? '取消置顶' : '置顶文档', icon: `fas ${file.isPinned ? 'fa-unlink' : 'fa-thumbtack'}`, action: () => {
+                    mutateDB(db => { const f = db.files.find(x => x.id === id); if (!f) return false; f.isPinned = !f.isPinned; });
+                }},
+                { text: '移动到...', icon: 'fas fa-exchange-alt', action: () => {
+                    const db = getDB();
+                    const cur = db.files.find(x => x.id === id);
+                    if (!cur) return;
+                    let moveOptions = [{ text: '选择目标文件夹', isTitle: true }];
+                    db.folders.forEach(targetFolder => {
+                        if (targetFolder.id !== cur.folderId) {
+                            const tid = targetFolder.id;
+                            moveOptions.push({
+                                text: targetFolder.name, icon: 'fas fa-folder',
+                                action: () => mutateDB(db => {
+                                    const f = db.files.find(x => x.id === id), t = db.folders.find(x => x.id === tid);
+                                    if (!f || !t) return false;
+                                    f.folderId = tid; t.isOpen = true;
+                                })
+                            });
+                        }
+                    });
+                    setTimeout(() => showActionMenu(moveOptions), 350);
+                }},
+                { text: '删除文档', icon: 'fas fa-trash-alt', danger: true, action: () => deleteFile(id) }
+            ]);
+        }
+
+        async function renameFile(id) {
+            const file = getDB().files.find(f => f.id === id);
+            if (!file) return;
+            const newTitle = await promptAsk('重命名文档', file.title, '完成');
+            if (!newTitle) return;
+            if (!mutateDB(db => { const f = db.files.find(x => x.id === id); if (!f) return false; f.title = newTitle; })) return;
+            if (currentFile && currentFile.id === id) {
+                currentFile.title = newTitle;
+                headerUI.headerTitle.textContent = currentState === 'edit' ? "编辑: " + newTitle : newTitle;
+            }
+        }
+
+        async function deleteFile(id) {
+            const file = getDB().files.find(f => f.id === id);
+            if (!file) return;
+            const editingIt = currentState === 'edit' && currentFile && currentFile.id === id;
+            if (!(await confirmAsk(`删除文档「${file.title}」？`, editingIt ? '删除后无法恢复，正在编辑的修改也会一起丢弃。' : '删除后无法恢复。', '删除', true))) return;
+            if (!mutateDB(db => { db.files = db.files.filter(f => f.id !== id); })) return;
+            clearDraft(id); removeReadPos(id);
+            if (lsGet(LAST_DOC_KEY) === id) lsRemove(LAST_DOC_KEY);
+            if (currentFile && currentFile.id === id) {
+                currentFile = null; lastReadFileId = null;
+                switchState('home');
+                if (isMobileWidth()) closeDrawer();
+            }
+        }
+
+        // ================= 顶部全局事件监听 =================
+        document.getElementById('btn-new-folder').onclick = async () => {
+            const name = await promptAsk('新建文件夹', '', '创建', '文件夹名称');
+            if (name) mutateDB(db => { db.folders.push({ id: 'folder_' + newId(), name, isOpen: true, isPinned: false }); });
+        };
+
+        let tooltipTimer;
+        // 双击标题回到顶部。窗口内的第二击算双击，窗口外走原来的 tooltip toggle 逻辑。
+        const TITLE_DBLCLICK_MS = 300;
+        // 双击时 tooltip 已经弹出来了，这里不去撤销它——"弹出后被瞬间抹掉"才是刺眼的
+        // 那一闪，而让它自然淡出就只是一次正常的显示。代价只是文件名多停留一会儿，
+        // 换来的是单击不需要任何淡入延迟（延迟期间画面毫无变化，点下去像没反应）。
+        // 停留时长按回顶动画（实测 0.93~1.09s）取整，滚动停下时它也差不多淡完。
+        const DBL_TOOLTIP_LINGER_MS = 900;
+        let titleClickTimer = null;
+
+        const scrollReaderToTop = () => {
+            if (currentState !== 'read') return;
+            vRead.scrollTo({ top: 0, behavior: 'smooth' });
+        };
+
+        const toggleTitleTooltip = () => {
+            if (titleTooltip.classList.contains('show')) { titleTooltip.classList.remove('show'); clearTimeout(tooltipTimer); return; }
+            // 文件名来自用户本机任意 .md，这条路径不经过 marked 的 DOMPurify 管线，
+            // 所以只能走 textContent，绝不能拼 innerHTML（形如
+            // <img src=x onerror=...>.md 的文件名会被执行）。
+            titleTooltip.textContent = currentFile.title;
+            titleTooltip.classList.add('show');
+            clearTimeout(tooltipTimer); tooltipTimer = setTimeout(() => { titleTooltip.classList.remove('show'); }, 3000);
+        };
+
+        headerUI.headerTitle.onclick = () => {
+            if (!currentFile) return;
+            // 阅读视图之外（编辑模式）完全走原来的路径，行为不变。
+            if (currentState !== 'read') { toggleTitleTooltip(); return; }
+
+            if (titleClickTimer) {           // 窗口内的第二击 → 双击
+                clearTimeout(titleClickTimer);
+                titleClickTimer = null;
+                // 不撤销 tooltip，只把它的停留时间缩短：双击的意图是回顶不是看文件名。
+                clearTimeout(tooltipTimer);
+                tooltipTimer = setTimeout(() => { titleTooltip.classList.remove('show'); }, DBL_TOOLTIP_LINGER_MS);
+                scrollReaderToTop();
+                return;
+            }
+            toggleTitleTooltip();            // 第一击照常，零延迟
             titleClickTimer = setTimeout(() => { titleClickTimer = null; }, TITLE_DBLCLICK_MS);
         };
         titleTooltip.onclick = () => titleTooltip.classList.remove('show');
-        headerUI.btnReadMore.onclick = () => { const isDark = document.body.getAttribute('data-theme') === 'dark'; showActionMenu([ { text: '编辑文档', icon: 'fas fa-edit', action: () => switchState('edit') }, { text: '复制全文', icon: 'fas fa-copy', action: () => copyContent(null) }, { text: '放大字号', icon: 'fas fa-plus', action: () => changeFontScale(0.1) }, { text: '缩小字号', icon: 'fas fa-minus', action: () => changeFontScale(-0.1) }, { text: '恢复默认字号', icon: 'fas fa-rotate-left', action: () => resetFontScale() }, { text: isDark ? '浅色模式' : '深色模式', icon: isDark ? 'fas fa-sun' : 'fas fa-moon', action: () => toggleTheme() }, { text: '返回主页', icon: 'fas fa-home', action: () => switchState('home'), danger: true } ]); };
-        headerUI.btnEditMore.onclick = () => { const isDark = document.body.getAttribute('data-theme') === 'dark'; showActionMenu([ { text: '保存修改', icon: 'fas fa-save', action: () => saveEdit(), success: true }, { text: '重置内容', icon: 'fas fa-undo', action: () => resetEdit() }, { text: isDark ? '浅色模式' : '深色模式', icon: isDark ? 'fas fa-sun' : 'fas fa-moon', action: () => toggleTheme() }, { text: '放弃修改', icon: 'fas fa-times', action: () => cancelEdit(), danger: true } ]); };
+        document.addEventListener('click', (e) => {
+            if (!titleTooltip.classList.contains('show')) return;
+            if (titleTooltip.contains(e.target) || headerUI.headerTitle.contains(e.target)) return;
+            titleTooltip.classList.remove('show');
+            clearTimeout(tooltipTimer);
+        });
 
-        const openDrawer = () => { overlay.style.display = 'block'; setTimeout(() => overlay.style.opacity = '1', 10); drawer.style.transform = 'translateX(0)'; };
-        const closeDrawer = () => { overlay.style.opacity = '0'; drawer.style.transform = 'translateX(-100%)'; setTimeout(() => overlay.style.display = 'none', 300); };
+        headerUI.btnReadMore.onclick = () => {
+            const isDark = document.body.getAttribute('data-theme') === 'dark';
+            showActionMenu([
+                { text: '编辑文档', icon: 'fas fa-edit', action: () => switchState('edit') },
+                { text: '复制全文', icon: 'fas fa-copy', action: () => copyContent(null) },
+                { text: '下载为 .md 文件', icon: 'fas fa-download', action: () => downloadCurrent() },
+                { text: '放大字号', icon: 'fas fa-plus', action: () => changeFontScale(0.1) },
+                { text: '缩小字号', icon: 'fas fa-minus', action: () => changeFontScale(-0.1) },
+                { text: '恢复默认字号', icon: 'fas fa-rotate-left', action: () => resetFontScale() },
+                { text: isDark ? '浅色模式' : '深色模式', icon: isDark ? 'fas fa-sun' : 'fas fa-moon', action: () => toggleTheme() },
+                { text: '返回主页', icon: 'fas fa-home', action: () => switchState('home'), danger: true }
+            ]);
+        };
+
+        headerUI.btnEditMore.onclick = () => {
+            const isDark = document.body.getAttribute('data-theme') === 'dark';
+            showActionMenu([
+                { text: '保存修改', icon: 'fas fa-save', action: () => saveEdit(), success: true },
+                { text: '重置内容', icon: 'fas fa-undo', action: () => resetEdit() },
+                { text: isDark ? '浅色模式' : '深色模式', icon: isDark ? 'fas fa-sun' : 'fas fa-moon', action: () => toggleTheme() },
+                { text: '放弃修改', icon: 'fas fa-times', action: () => cancelEdit(), danger: true }
+            ]);
+        };
+
+        let drawerOpen = false;
+        const openDrawer = () => { drawerOpen = true; renderDrawer(); showLayer(overlay); drawer.style.transform = 'translateX(0)'; };
+        const closeDrawer = () => {
+            if (!drawerOpen) return;
+            drawerOpen = false; hideLayer(overlay); drawer.style.transform = 'translateX(-100%)';
+            // 还没到点的搜索计时作废，搜索词直接以输入框为准（下次打开时按它画）
+            clearTimeout(searchTimer); searchQuery = searchInput.value.trim();
+        };
         headerUI.btnHamburger.onclick = openDrawer; overlay.onclick = closeDrawer;
-        
+
+        // ================= 移动端边缘滑动呼出/关闭菜单 =================
         let touchStartX = 0;
-        document.addEventListener('touchstart', (e) => { touchStartX = e.changedTouches[0].screenX; }, { passive: true });
-        document.addEventListener('touchend', (e) => { if (window.innerWidth >= 768) return; let touchEndX = e.changedTouches[0].screenX; if (touchStartX < 40 && touchEndX - touchStartX > 50) { openDrawer(); } if (overlay.style.display === 'block' && touchStartX - touchEndX > 50) { closeDrawer(); } }, { passive: true });
-        btnFabToc.onclick = () => { tocOverlay.style.display = 'block'; setTimeout(() => tocOverlay.style.opacity = '1', 10); tocSidebar.classList.add('mobile-open'); };
-        tocOverlay.onclick = () => { tocOverlay.style.opacity = '0'; tocSidebar.classList.remove('mobile-open'); setTimeout(() => tocOverlay.style.display = 'none', 300); };
+        document.addEventListener('touchstart', (e) => {
+            touchStartX = e.changedTouches[0].screenX;
+        }, { passive: true });
+
+        document.addEventListener('touchend', (e) => {
+            if (window.innerWidth >= 768 || dialogOpen || folderDragging || suppressFolderClick) return;
+            let touchEndX = e.changedTouches[0].screenX;
+            // 边缘左滑(起始点小于40px)向右超过50px -> 打开抽屉
+            if (touchStartX < 40 && touchEndX - touchStartX > 50 && !drawerOpen) {
+                openDrawer();
+            }
+            // 抽屉打开时，向左滑动超过50px -> 关闭抽屉
+            else if (drawerOpen && touchStartX - touchEndX > 50) {
+                closeDrawer();
+            }
+        }, { passive: true });
+
+        const openTocMobile = () => { showLayer(tocOverlay); tocSidebar.classList.add('mobile-open'); };
+        const closeTocMobile = () => { if (!tocSidebar.classList.contains('mobile-open')) return; hideLayer(tocOverlay); tocSidebar.classList.remove('mobile-open'); };
+        btnFabToc.onclick = openTocMobile;
+        tocOverlay.onclick = closeTocMobile;
+
         headerUI.btnBack.onclick = () => { if(currentState === 'edit') cancelEdit(); else switchState('home'); };
-        headerUI.headerLogo.onclick = () => switchState('home'); headerUI.btnReadEdit.onclick = () => switchState('edit');
+        headerUI.headerLogo.onclick = () => switchState('home');
+        headerUI.btnReadEdit.onclick = () => switchState('edit');
         headerUI.btnReadCopy.onclick = () => copyContent(headerUI.btnReadCopy);
-        headerUI.btnEditSave.onclick = saveEdit; headerUI.btnEditCancel.onclick = cancelEdit; headerUI.btnEditReset.onclick = resetEdit;
+        headerUI.btnReadDownload.onclick = () => downloadCurrent();
+        headerUI.btnEditSave.onclick = () => saveEdit(); headerUI.btnEditCancel.onclick = () => cancelEdit(); headerUI.btnEditReset.onclick = () => resetEdit();
 
-        function saveToCurrentFolder(fileParams) { let db = getDB(); let newFile = { ...fileParams, timestamp: Date.now(), isPinned: false, folderId: 'root' }; const idx = db.files.findIndex(f => f.id === newFile.id); if (idx > -1) { newFile.folderId = db.files[idx].folderId; newFile.isPinned = db.files[idx].isPinned; db.files[idx] = newFile; } else { db.files.unshift(newFile); } return saveDB(db); }
-        // 存失败就留在编辑页，编辑框内容不动（saveDB 已经弹了提示）
-        function saveEdit() { currentFile.content = editorTextarea.value; if (saveToCurrentFolder(currentFile)) switchState('read'); }
-        // 编辑页有没保存的修改
+        function downloadCurrent() {
+            if (!currentFile) return;
+            const f = getDB().files.find(x => x.id === currentFile.id) || currentFile;
+            downloadDoc(f);
+        }
+
+        // ================= 打开文档 / 离开编辑 =================
+        // 所有「换一篇文档」的入口（侧边栏点文档、新建、导入、拖入、示例、首页继续阅读）都走这里，
+        // 「有未保存修改先问一句」只在 confirmLeaveEdit 一处判断。原来侧边栏点文档、新建文档两条路
+        // 没问就直接切走了，修改一声不响就没了（P1-1）。
+        async function openDoc(id, opts = {}) {
+            if (!opts.jump && !opts.force && currentState === 'read' && currentFile && currentFile.id === id) { closeDrawer(); return; }
+            if (!opts.skipConfirm && !(await confirmLeaveEdit())) return;
+            const file = getDB().files.find(f => f.id === id);
+            if (!file) { notify('这篇文档已经不在了'); renderDrawer(); renderHomeContinue(); return; }
+            currentFile = { ...file };
+            closeDrawer(); closeTocMobile();
+            await switchState('read');
+            if (opts.jump && currentState === 'read' && currentFile.id === id) {
+                const pos = getReadPos(id);
+                if (pos) { hideResumePill(); restoreReadPos(pos); }
+            }
+        }
+
+        // 编辑页有没保存的修改。没有「已经确认过」之类的标记：只要人还在编辑页、内容跟进来时不一样，
+        // 就算有未保存的修改，下次离开照样会问（关页面也照样拦）。
         function hasUnsavedEdit() { return currentState === 'edit' && editorTextarea.value !== originalContent; }
-        // 关标签页 / 刷新 / 离开时有未保存修改就让浏览器拦一下（浏览器只显示它自己的通用提示文字）
-        window.addEventListener('beforeunload', (e) => { if (hasUnsavedEdit()) { e.preventDefault(); e.returnValue = ''; } });
-        function cancelEdit() { if(editorTextarea.value === originalContent || confirm("放弃修改？")) switchState('read'); }
-        function resetEdit() { if(confirm("恢复到未修改前？")) { editorTextarea.value = originalContent; renderMarkdown(originalContent, editorPreview); } }
-        function copyContent(btnRef) { navigator.clipboard.writeText(currentFile.content).then(() => { if(btnRef) { btnRef.innerHTML = '<i class="fas fa-check"></i>'; setTimeout(() => btnRef.innerHTML = '<i class="fas fa-copy"></i>', 2000); } else alert("✅ 复制成功"); }); }
 
-        // 编辑到一半拖了个文件进来（或者点了导入）：原来直接切到新文件，没保存的修改一声不响就没了
-        function processFileObj(file) { if (!file) return; if (hasUnsavedEdit() && !confirm('当前文档有未保存的修改，打开新文件会丢掉这些修改。继续吗？')) return; const title = file.name.replace(/\.[^/.]+$/, ""); const reader = new FileReader(); reader.onload = ev => { currentFile = { id: Date.now().toString(), title, content: ev.target.result }; saveToCurrentFolder(currentFile); switchState('read'); closeDrawer(); }; reader.readAsText(file); }
-        function handleFile(e) { processFileObj(e.target.files[0]); if (e.target) e.target.value = ''; }
-        document.getElementById('file-upload-home').onchange = handleFile; document.getElementById('file-upload-drawer').onchange = handleFile;
-        document.addEventListener('dragover', (e) => { e.preventDefault(); });
-        document.addEventListener('drop', (e) => { e.preventDefault(); if (e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files.length > 0) { processFileObj(e.dataTransfer.files[0]); } });
+        // 正在编辑的是哪篇（进入编辑页时记下）。离开编辑页时 switchState 按它删草稿。
+        let editingId = null;
 
-        // 每个目标容器一个渲染序号。renderMarkdown 里有 await（语言包、MathJax、Mermaid），连续打字时
-        // 前一次可能还没跑完下一次就开始了；没有这个序号，先开始、后结束的那次会把旧内容盖回预览。
+        // 返回 true 表示可以离开编辑页（没改动 / 已保存 / 选了不保存）。选「不保存」时这里不删草稿：
+        // 调用方后面还可能半路放弃（新建时名字框点了取消、导入时同名点了取消），人还留在编辑页、改动还在，
+        // 草稿得留着；真正离开编辑页时 switchState 才删。
+        // 调用方拿到 true 之后，切换文档要走 skipConfirm（openDoc）或者直接 switchState，别再调一次本函数。
+        async function confirmLeaveEdit() {
+            if (!hasUnsavedEdit()) return true;
+            const v = await ask({
+                title: '有未保存的修改',
+                message: `「${currentFile.title}」的修改还没保存。`,
+                buttons: [
+                    { text: '保存', value: 'save', bold: true },
+                    { text: '不保存', value: 'discard', style: 'destructive' },
+                    { text: '取消', value: 'cancel', style: 'cancel' }
+                ]
+            });
+            if (v === 'save') return await commitEdit();
+            if (v === 'discard') return true;
+            return false;
+        }
+
+        // 把编辑框存进库。返回是否存上了。
+        // 2026-10-09：①只在存上之后才更新内存里的 currentFile（原来先改内存再存，存失败点「放弃」时阅读页显示的是
+        // 没存上的内容，之后关页面也不再提醒，P2-4）；②只改这一篇的内容和时间，标题/文件夹/置顶以库里最新的为准
+        //（原来整条用手里的旧副本覆盖，别的页面刚改的名字会被改回去）；③编辑期间别的页面保存过这篇，先问再覆盖。
+        async function commitEdit() {
+            const id = currentFile.id;
+            const content = editorTextarea.value;
+            const stored = getDB().files.find(f => f.id === id);
+            if (stored && stored.content !== originalContent && stored.content !== content) {
+                const v = await ask({
+                    title: '这篇文档在别处被改过',
+                    message: '你编辑期间，另一个页面（或 markdown-reader）保存过这篇文档。直接保存会覆盖那边的修改。',
+                    buttons: [
+                        { text: '另存为新文档', value: 'copy', bold: true },
+                        { text: '覆盖保存', value: 'overwrite', style: 'destructive' },
+                        { text: '取消', value: 'cancel', style: 'cancel' }
+                    ]
+                });
+                if (v === 'copy') {
+                    const copy = createFile(currentFile.title + '（我的版本）', content, SAVE_FAIL_EDIT);
+                    if (!copy) return false;
+                    clearDraft(id);
+                    currentFile = { ...copy }; originalContent = content;
+                    return true;
+                }
+                if (v !== 'overwrite') return false;
+            }
+            const ok = mutateDB(db => {
+                const f = db.files.find(x => x.id === id);
+                // 编辑期间这篇在别处被删了：按原来的 id 存回去，修改不丢
+                if (!f) db.files.unshift({ id, title: currentFile.title, content, timestamp: Date.now(), isPinned: false, folderId: 'root' });
+                else { f.content = content; f.timestamp = Date.now(); }
+            }, SAVE_FAIL_EDIT);
+            if (!ok) return false;
+            currentFile = { ...ok.files.find(x => x.id === id) }; // ok 就是刚存进去的那个库
+            originalContent = content;
+            clearDraft(id);
+            return true;
+        }
+
+        async function saveEdit() { if (currentState !== 'edit') return; if (await commitEdit()) switchState('read'); }
+
+        // 关标签页 / 刷新 / 离开时有未保存修改就让浏览器拦一下（浏览器只显示它自己的通用提示文字；
+        // 这是唯一还用浏览器原生弹框的地方，网页没法自己画这个框）。iPhone 上这个拦截基本不起作用，靠下面的草稿兜底。
+        window.addEventListener('beforeunload', (e) => { if (hasUnsavedEdit()) { saveDraftNow(); e.preventDefault(); e.returnValue = ''; } });
+        async function cancelEdit() {
+            if (editorTextarea.value !== originalContent && !(await confirmAsk('放弃修改？', '这次的修改不会保存。', '放弃', true))) return;
+            clearDraft(currentFile.id);
+            switchState('read');
+        }
+        async function resetEdit() {
+            if (!(await confirmAsk('恢复到未修改前？', '编辑框会回到这次进入编辑时的内容。', '恢复', true))) return;
+            editorTextarea.value = originalContent;
+            clearDraft(currentFile.id);
+            schedulePreview(true);
+        }
+        function copyContent(btnRef) {
+            navigator.clipboard.writeText(currentFile.content).then(() => {
+                if (btnRef) { btnRef.innerHTML = '<i class="fas fa-check"></i>'; setTimeout(() => btnRef.innerHTML = '<i class="fas fa-copy"></i>', 2000); }
+                else notify('已复制全文');
+            }, () => notify('复制失败：浏览器不允许访问剪贴板'));
+        }
+
+        // ================= 自动草稿 =================
+        // 原来只有点「保存」才存，iPhone 上关页面的拦截基本不起作用，误关页面、后台被杀改动就没了。
+        // 编辑时停顿 0.8 秒、切到后台、关页面时，把编辑框存成这篇的草稿（单独的键，不动文档库）；
+        // 下次进入这篇的编辑页会问要不要恢复，阅读页顶部也会提示。保存 / 放弃 / 删除时清掉。
+        const DRAFT_PREFIX = 'mdr-draft:';
+        let draftTimer = null;
+        let pendingDraftRestore = null; // 从阅读页的草稿条点「继续编辑」进来的那篇：直接恢复，不再问
+        function getDraft(id) {
+            try { const d = JSON.parse(localStorage.getItem(DRAFT_PREFIX + id) || 'null'); return d && typeof d.content === 'string' ? d : null; }
+            catch (_) { return null; }
+        }
+        // 用户明确做了决定（保存成功、放弃修改、删除这篇、丢弃草稿）时用：不管草稿是谁写的都删
+        function clearDraft(id) { clearTimeout(draftTimer); lsRemove(DRAFT_PREFIX + id); ownDraft = null; }
+        // 自动清理（离开编辑页、内容改回原样）时用：只删「这个页面自己写的那份」。草稿键跟姊妹站共用，
+        // 另一个标签页（或 markdown-reader）可能刚给同一篇写了它自己的草稿，那份不是我们的，不能顺手删掉。
+        let ownDraft = null; // { id, raw }：这个页面最后一次写进去的草稿原文
+        function clearOwnDraft(id) {
+            clearTimeout(draftTimer);
+            if (ownDraft && ownDraft.id === id && lsGet(DRAFT_PREFIX + id) === ownDraft.raw) lsRemove(DRAFT_PREFIX + id);
+            ownDraft = null;
+        }
+        function scheduleDraftSave() { clearTimeout(draftTimer); draftTimer = setTimeout(saveDraftNow, 800); }
+        function saveDraftNow() {
+            clearTimeout(draftTimer);
+            if (currentState !== 'edit' || !currentFile) return;
+            const v = editorTextarea.value;
+            if (v === originalContent) { clearOwnDraft(currentFile.id); return; }
+            // 空间满了存不了草稿就算了，不打扰；真正点保存时会提示
+            const raw = JSON.stringify({ content: v, base: originalContent, title: currentFile.title, at: Date.now() });
+            if (lsSet(DRAFT_PREFIX + currentFile.id, raw)) ownDraft = { id: currentFile.id, raw };
+        }
+        async function restoreDraftIfAny() {
+            const id = currentFile.id;
+            const d = getDraft(id);
+            if (!d) { pendingDraftRestore = null; return; }
+            if (d.content === currentFile.content) { clearDraft(id); pendingDraftRestore = null; return; }
+            // 恢复了的草稿就算这次编辑自己的：之后选「不保存」离开时要一起删掉（clearOwnDraft 认的是 ownDraft）
+            const adopt = () => { editorTextarea.value = d.content; ownDraft = { id, raw: lsGet(DRAFT_PREFIX + id) }; };
+            if (pendingDraftRestore === id) { pendingDraftRestore = null; adopt(); return; }
+            const changed = d.base !== currentFile.content;
+            const v = await ask({
+                title: '有未保存的草稿',
+                message: `${fmtTime(d.at)} 编辑这篇时有修改没保存。` + (changed ? '\n注意：那之后这篇文档又被保存过，恢复草稿会以草稿为准。' : ''),
+                buttons: [{ text: '丢弃', value: 'discard', style: 'destructive' }, { text: '恢复草稿', value: 'restore', bold: true }]
+            });
+            if (currentState !== 'edit' || !currentFile || currentFile.id !== id) return;
+            // 按 Esc 关掉也当「恢复」：宁可多留一份，不能悄悄丢
+            if (v === 'discard') clearDraft(id);
+            else adopt();
+        }
+        function renderDraftBar() {
+            draftBarSlot.innerHTML = '';
+            if (!currentFile) return;
+            const d = getDraft(currentFile.id);
+            if (!d || d.content === currentFile.content) return;
+            const id = currentFile.id;
+            const bar = document.createElement('div'); bar.className = 'draft-bar';
+            const text = document.createElement('span'); text.className = 'dt';
+            text.textContent = `这篇有 ${fmtTime(d.at)} 未保存的草稿`;
+            const go = document.createElement('button'); go.type = 'button'; go.textContent = '继续编辑';
+            go.onclick = () => { pendingDraftRestore = id; switchState('edit'); };
+            const drop = document.createElement('button'); drop.type = 'button'; drop.className = 'danger'; drop.textContent = '丢弃';
+            drop.onclick = async () => { if (await confirmAsk('丢弃这份草稿？', '草稿里的修改会被删掉，文档本身不变。', '丢弃', true)) { clearDraft(id); renderDraftBar(); } };
+            bar.append(text, go, drop);
+            draftBarSlot.appendChild(bar);
+        }
+        document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'hidden') { saveDraftNow(); if (currentState === 'read') saveReadPos(); } });
+        window.addEventListener('pagehide', () => { saveDraftNow(); if (currentState === 'read') saveReadPos(); });
+
+        // ================= 记住每篇读到哪（不自动跳，点了才跳） =================
+        // 用户的要求：每次打开都是首页；「接着上次读」做成按钮——首页有「继续阅读」，
+        // 打开读过的文档时底部出现「回到上次读到的位置」，点了才跳。
+        // 位置记成「正文第几个顶层块 + 在这块里的比例」，字号变了、图片晚加载也能大致对上；对不上时退回按整篇比例。
+        // 跟 markdown-reader 分开记：公式在两站排版不同（MathJax / KaTeX），同一篇的高度不一样，位置不通用；
+        //「上次看的是哪篇」也是各站各记。草稿（mdr-draft:）则两站共用——文档库本来就是同一份，草稿跟着文档走。
+        const POS_KEY = 'mf-read-pos', LAST_DOC_KEY = 'mf-last-doc';
+        let posSaveEnabled = false, posDirty = false, posEnableTimer = null, posSaveTimer = null;
+        function readAllPos() { try { return JSON.parse(lsGet(POS_KEY) || '{}') || {}; } catch (_) { return {}; } }
+        function getReadPos(id) { const p = readAllPos()[id]; return p && typeof p.r === 'number' ? p : null; }
+        function removeReadPos(id) { const all = readAllPos(); if (all[id]) { delete all[id]; lsSet(POS_KEY, JSON.stringify(all)); } }
+        // 程序自己设滚动位置（换文档回到顶部、重新渲染）时不记，免得把上次读到的位置冲成 0
+        function disablePosSave() { posSaveEnabled = false; posDirty = false; clearTimeout(posEnableTimer); clearTimeout(posSaveTimer); posSaveTimer = null; }
+        function enablePosSaveSoon() { clearTimeout(posEnableTimer); posEnableTimer = setTimeout(() => { posSaveEnabled = true; }, 300); }
+        function captureReadPos() {
+            const max = vRead.scrollHeight - vRead.clientHeight;
+            if (max <= 0) return null;
+            const kids = readerContent.children;
+            const vTop = vRead.getBoundingClientRect().top;
+            let i = -1, f = 0;
+            for (let k = 0; k < kids.length; k++) {
+                const r = kids[k].getBoundingClientRect();
+                if (r.bottom > vTop + 1) { i = k; f = r.height > 0 ? Math.min(1, Math.max(0, (vTop - r.top) / r.height)) : 0; break; }
+            }
+            return { i, f: +f.toFixed(4), n: kids.length, r: +(vRead.scrollTop / max).toFixed(4), t: Date.now() };
+        }
+        // 记在「阅读区此刻显示的那篇」（lastReadFileId）名下，不用 currentFile：换文档时 openDoc 先把 currentFile
+        // 换成了新的一篇、再离开阅读页，用 currentFile 会把上一篇的位置记到新那篇头上（还会冒出一个假的「回到上次位置」）。
+        function saveReadPos() {
+            if (currentState !== 'read' || !lastReadFileId || !posDirty) return;
+            const pos = captureReadPos();
+            if (!pos) return;
+            posDirty = false;
+            const all = readAllPos();
+            all[lastReadFileId] = pos;
+            const ids = Object.keys(all);
+            if (ids.length > 300) ids.sort((a, b) => all[a].t - all[b].t).slice(0, ids.length - 300).forEach(k => delete all[k]);
+            lsSet(POS_KEY, JSON.stringify(all));
+        }
+        function restoreReadPos(pos) {
+            const kids = readerContent.children;
+            const max = vRead.scrollHeight - vRead.clientHeight;
+            let top;
+            const el = pos.n === kids.length && pos.i >= 0 ? kids[pos.i] : null;
+            if (el) {
+                const r = el.getBoundingClientRect();
+                top = vRead.scrollTop + (r.top - vRead.getBoundingClientRect().top) + pos.f * r.height;
+            } else top = pos.r * max;
+            vRead.scrollTop = Math.max(0, Math.min(max, Math.round(top)));
+            posDirty = true;
+            posSaveEnabled = true;
+            updateTocActive();
+        }
+        const pctOf = pos => Math.min(100, Math.max(1, Math.round(pos.r * 100)));
+        let resumeTimer = null, resumeFor = null, resumePos = null;
+        function offerResume() {
+            const pos = getReadPos(currentFile.id);
+            if (!pos || pos.r < 0.02 || vRead.scrollHeight <= vRead.clientHeight) return;
+            resumeFor = currentFile.id;
+            // 显示按钮时就把位置记下来：用户先随手滑了一下，新位置会把存着的那份覆盖掉，点按钮时再去读就跳错了
+            resumePos = pos;
+            resumeText.textContent = `回到上次读到的位置 · ${pctOf(pos)}%`;
+            resumePill.classList.add('show');
+            clearTimeout(resumeTimer);
+            resumeTimer = setTimeout(hideResumePill, 8000);
+        }
+        function hideResumePill() { clearTimeout(resumeTimer); resumePill.classList.remove('show'); }
+        document.getElementById('resume-go').onclick = () => {
+            hideResumePill();
+            if (currentState !== 'read' || !currentFile || currentFile.id !== resumeFor || !resumePos) return;
+            restoreReadPos(resumePos);
+        };
+        document.getElementById('resume-close').onclick = hideResumePill;
+
+        // 首页「继续阅读」：上次在看的那篇 + 读到百分之几
+        function renderHomeContinue() {
+            homeContinue.innerHTML = '';
+            const id = lsGet(LAST_DOC_KEY);
+            const file = id && getDB().files.find(f => f.id === id);
+            if (!file) return;
+            const pos = getReadPos(id);
+            const btn = document.createElement('button'); btn.type = 'button'; btn.className = 'continue-btn';
+            const label = document.createElement('span'); label.className = 'cl';
+            label.innerHTML = '<i class="fas fa-book-open"></i>';
+            label.appendChild(document.createTextNode(' 继续阅读' + (pos && pos.r >= 0.02 ? ` · 读到 ${pctOf(pos)}%` : '')));
+            const title = document.createElement('span'); title.className = 'ct'; title.textContent = file.title;
+            btn.append(label, title);
+            btn.onclick = () => openDoc(id, { jump: true });
+            homeContinue.appendChild(btn);
+        }
+
+        // ================= 导入文件 =================
+        const MD_EXT_RE = /\.(md|markdown|mdown|mkd|mkdn|mdwn|mdx|txt|text)$/i;
+        const IMPORT_FAIL = '浏览器本地存储空间已满（或被禁用），文件没有存进来。\n请删掉一些不用的文档后再导入。';
+        // 解码：UTF-16（带 BOM）→ UTF-8（严格模式，有一个字节不合法就算失败）→ GBK。
+        // Windows 记事本旧版本默认存 GBK，原来固定按 UTF-8 解，打开全是乱码（P3-13）。
+        function decodeText(bytes) {
+            if (bytes[0] === 0xFF && bytes[1] === 0xFE) return new TextDecoder('utf-16le').decode(bytes);
+            if (bytes[0] === 0xFE && bytes[1] === 0xFF) return new TextDecoder('utf-16be').decode(bytes);
+            try { return new TextDecoder('utf-8', { fatal: true }).decode(bytes); }
+            catch (_) {
+                try { return new TextDecoder('gbk').decode(bytes); }
+                catch (__) { return new TextDecoder('utf-8').decode(bytes); }
+            }
+        }
+        // 文本文件里不会出现 0 字节（UTF-16 带 BOM 的除外）；图片、PDF、压缩包开头几 KB 里几乎一定有
+        function looksBinary(bytes) {
+            if ((bytes[0] === 0xFF && bytes[1] === 0xFE) || (bytes[0] === 0xFE && bytes[1] === 0xFF)) return false;
+            const n = Math.min(bytes.length, 8192);
+            for (let i = 0; i < n; i++) if (bytes[i] === 0) return true;
+            return false;
+        }
+        function uniqueTitle(base, db) {
+            const titles = new Set(db.files.map(f => f.title));
+            if (!titles.has(base)) return base;
+            let i = 2;
+            while (titles.has(`${base} (${i})`)) i++;
+            return `${base} (${i})`;
+        }
+
+        // 选择框不加 accept 限制：iPhone 上给 accept 写 .md 这类扩展名，有的系统版本会把 .md 文件置灰选不了（不确定，
+        // 没法在电脑上验证），所以放开选择、选完再检查：不是文本的拒绝，扩展名不认识的先问一句（P3-3）。
+        async function processFileObj(file) {
+            if (!file) return;
+            const extOk = MD_EXT_RE.test(file.name);
+            const binaryType = /^(image|audio|video|font)\//.test(file.type) || /^application\/(pdf|zip|x-zip-compressed|x-rar|x-7z|msword|vnd\.)/.test(file.type);
+            if (!extOk && binaryType) { showAlert('不能打开这个文件', `「${file.name}」不是文本文件。\n能打开的是 Markdown（.md）和纯文本（.txt）文件。`); return; }
+            if (file.size > 8 * 1024 * 1024) { showAlert('文件太大', `「${file.name}」有 ${(file.size / 1048576).toFixed(1)} MB，浏览器本地存储一共只有 5MB 左右，存不下。`); return; }
+            let bytes;
+            try { bytes = new Uint8Array(await file.arrayBuffer()); }
+            catch (e) { showAlert('读取失败', `「${file.name}」读不出来。`); return; }
+            if (looksBinary(bytes)) { showAlert('不能打开这个文件', `「${file.name}」不是文本文件（里面有二进制内容）。\n能打开的是 Markdown（.md）和纯文本（.txt）文件。`); return; }
+            const text = decodeText(bytes);
+            if (!extOk && !(await confirmAsk('这不是 .md 文件', `「${file.name}」会按纯文本打开，继续吗？`, '打开'))) return;
+            // 文件确认能打开了，再问编辑页那边要不要保存（编辑到一半拖了个文件进来 / 点了导入）
+            if (!(await confirmLeaveEdit())) return;
+
+            const baseTitle = file.name.replace(/\.[^/.]+$/, "") || file.name;
+            const db = getDB();
+            const same = db.files.filter(f => f.title === baseTitle);
+            if (same.length) {
+                // 一模一样的已经在库里：直接打开那篇，不再存第二份
+                const identical = same.find(f => f.content === text);
+                if (identical) { notify('库里已经有这篇，直接打开'); await openDoc(identical.id, { skipConfirm: true }); return; }
+                // 同一个文件导入两次原来会出现两份（O-10）
+                const v = await ask({
+                    title: '已有同名文档',
+                    message: `库里已经有「${baseTitle}」，内容跟这个文件不一样。`,
+                    buttons: [
+                        { text: '另存一份', value: 'copy', bold: true },
+                        { text: '覆盖原文档', value: 'overwrite', style: 'destructive' },
+                        { text: '取消', value: 'cancel', style: 'cancel' }
+                    ]
+                });
+                if (v === 'overwrite') {
+                    const target = same.slice().sort((a, b) => b.timestamp - a.timestamp)[0];
+                    const ok = mutateDB(db => {
+                        const f = db.files.find(x => x.id === target.id);
+                        if (!f) return false;
+                        f.content = text; f.timestamp = Date.now();
+                    }, IMPORT_FAIL);
+                    if (ok) { clearDraft(target.id); removeReadPos(target.id); if (currentFile && currentFile.id === target.id) lastReadFileId = null; await openDoc(target.id, { skipConfirm: true, force: true }); }
+                    return;
+                }
+                if (v !== 'copy') return;
+            }
+            // 起名要用此刻最新的库：上面弹框等着用户点的时候，别的标签页可能刚好存了同名的「xx (2)」
+            const created = createFile(uniqueTitle(baseTitle, getDB()), text, IMPORT_FAIL);
+            if (!created) return;
+            await openDoc(created.id, { skipConfirm: true });
+        }
+
+        // 原有的 input onchange 触发
+        function handleFile(e) {
+            const f = e.target.files[0];
+            if (e.target) e.target.value = '';
+            processFileObj(f);
+        }
+        document.getElementById('file-upload-home').onchange = handleFile;
+        document.getElementById('file-upload-drawer').onchange = handleFile;
+
+        // ================= 新增：全局拖拽文件监听逻辑 =================
+        document.addEventListener('dragover', (e) => {
+            e.preventDefault(); // 必须阻止默认行为，否则鼠标会显示“禁止拖拽”图标
+        });
+
+        document.addEventListener('drop', (e) => {
+            e.preventDefault(); // 必须阻止默认行为，否则浏览器会直接离开当前页面去打开文件
+            if (dialogOpen) return;
+            if (e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files.length > 0) {
+                processFileObj(e.dataTransfer.files[0]);
+            }
+        });
+
+        // ================= 备份与恢复 =================
+        // 文档只存在这个浏览器里：换手机、清缓存都会丢；iPhone Safari 还会在「累计 7 个用 Safari 的日子里没打开过本站」后
+        // 清掉本站的 localStorage（WebKit 官方博客 2020《Full Third-Party Cookie Blocking and More》）。
+        // 导出成一个 .json 文件自己存好，随时能恢复（审查报告 P1-3 / O-1）。
+        document.getElementById('menu-backup').onclick = () => {
+            const last = lsGet('mdr-last-export');
+            const count = getDB().files.length;
+            showActionMenu([
+                { text: `共 ${count} 篇 · ` + (last ? `上次导出：${fmtTime(Number(last))}` : '还没导出过'), isTitle: true },
+                { text: '导出全部文档（备份文件）', icon: 'fas fa-file-export', action: () => exportAll() },
+                { text: '从备份文件恢复', icon: 'fas fa-file-import', action: () => fileRestoreInput.click() },
+                { text: '为什么要备份', icon: 'fas fa-circle-info', action: () => showAlert('为什么要备份', '文档只存在这个浏览器里：换手机、清除浏览器数据都会丢。\niPhone 的 Safari 在你连续 7 个使用 Safari 的日子里都没打开过本站时，会自动清空本站数据。\n把本站「添加到主屏幕」再用，可以避开这条自动清理；定期导出一份备份最保险。') }
+            ]);
+        };
+        function exportAll() {
+            const db = getDB();
+            const payload = { app: 'mathematical-formulas', format: 1, exportedAt: new Date().toISOString(), db };
+            downloadText(`数学公式阅读器-备份-${dateStamp()}.json`, JSON.stringify(payload, null, 2), 'application/json');
+            lsSet('mdr-last-export', String(Date.now()));
+            notify(`已导出 ${db.files.length} 篇文档`);
+        }
+        fileRestoreInput.onchange = (e) => {
+            const f = e.target.files[0];
+            e.target.value = '';
+            if (f) restoreFromFile(f);
+        };
+        // 备份里的一条文档：字段齐全、类型对才收；id 统一成字符串
+        function normalizeBackupFile(f, folderIds) {
+            if (!f || (typeof f.id !== 'string' && typeof f.id !== 'number') || typeof f.content !== 'string') return null;
+            return {
+                id: String(f.id), title: typeof f.title === 'string' && f.title ? f.title : '未命名文档', content: f.content,
+                timestamp: Number(f.timestamp) || Date.now(), isPinned: !!f.isPinned,
+                folderId: folderIds.has(f.folderId) ? f.folderId : 'root'
+            };
+        }
+        async function restoreFromFile(file) {
+            let data;
+            try { data = JSON.parse(await file.text()); }
+            catch (_) { showAlert('不是有效的备份文件', `「${file.name}」读不出来。备份文件是本站「导出全部文档」生成的 .json 文件。`); return; }
+            let src = data && data.db ? data.db : data;
+            if (Array.isArray(src)) src = { folders: [], files: src };   // 很早的版本只存了一个文件数组
+            if (!src || !Array.isArray(src.files)) { showAlert('不是有效的备份文件', `「${file.name}」里没有找到文档列表。`); return; }
+            const folders = (Array.isArray(src.folders) ? src.folders : []).filter(f => f && typeof f.id === 'string' && f.id !== 'root' && typeof f.name === 'string')
+                .map(f => ({ id: f.id, name: f.name, isOpen: true, isPinned: !!f.isPinned }));
+            const cur = getDB();
+            const folderIds = new Set(['root', ...folders.map(f => f.id), ...cur.folders.map(f => f.id)]);
+            const files = src.files.map(f => normalizeBackupFile(f, folderIds)).filter(Boolean);
+            if (!files.length) { showAlert('备份是空的', `「${file.name}」里没有可恢复的文档。`); return; }
+            if (!(await confirmLeaveEdit())) return;
+            const v = await ask({
+                title: '从备份恢复',
+                message: `备份里有 ${files.length} 篇文档、${folders.length} 个文件夹。\n「合并」：只添加没有的，备份里更新的那篇会替换掉旧的。\n「替换全部」：先清空现在的 ${cur.files.length} 篇，再换成备份里的。`,
+                buttons: [
+                    { text: '合并', value: 'merge', bold: true },
+                    { text: '替换全部', value: 'replace', style: 'destructive' },
+                    { text: '取消', value: 'cancel', style: 'cancel' }
+                ]
+            });
+            if (v !== 'merge' && v !== 'replace') return;
+            if (v === 'replace' && !(await confirmAsk('确定替换全部？', `现在的 ${cur.files.length} 篇文档会被删掉，无法撤销。没备份过的话，建议先取消、导出一份。`, '替换', true))) return;
+            let added = 0, updated = 0;
+            const ok = mutateDB(db => {
+                if (v === 'replace') {
+                    const root = db.folders.find(f => f.id === 'root') || { id: 'root', name: '默认文件夹', isOpen: true };
+                    db.folders = [root, ...folders];
+                    db.files = files.map(f => ({ ...f, folderId: f.folderId === 'root' || folders.some(x => x.id === f.folderId) ? f.folderId : 'root' }));
+                    added = files.length;
+                    return;
+                }
+                folders.forEach(bf => { if (!db.folders.some(f => f.id === bf.id)) db.folders.push(bf); });
+                files.forEach(bf => {
+                    const ex = db.files.find(f => f.id === bf.id);
+                    if (!ex) { db.files.push(bf); added++; }
+                    else if (bf.timestamp > (ex.timestamp || 0) && (bf.content !== ex.content || bf.title !== ex.title)) {
+                        ex.title = bf.title; ex.content = bf.content; ex.timestamp = bf.timestamp; updated++;
+                    }
+                });
+            }, '浏览器本地存储空间已满（或被禁用），备份没有恢复进来。\n请删掉一些不用的文档后重试。');
+            if (!ok) return;
+            closeDrawer();
+            notify(v === 'replace' ? `已恢复 ${added} 篇文档` : `新增 ${added} 篇，更新 ${updated} 篇`, 2600);
+            // 离开编辑页已经确认过了（上面的 confirmLeaveEdit），恢复完不再停在编辑页
+            const still = currentFile && getDB().files.find(f => f.id === currentFile.id);
+            if (currentState !== 'home' && !still) { currentFile = null; lastReadFileId = null; switchState('home'); }
+            else if (currentState === 'edit') { currentFile = { ...still }; lastReadFileId = null; switchState('read'); }
+            else onExternalDBChange(true);
+        }
+
+        // ================= 多个标签页 / 姊妹站同时开着 =================
+        // 另一个标签页（或 markdown-reader）改了文档库时，浏览器会给这边发 storage 事件：
+        // 刷新侧边栏和当前文档的信息。编辑中的内容不动，保存时 commitEdit 会发现冲突并让你选。
+        window.addEventListener('storage', (e) => {
+            if (e.storageArea && e.storageArea !== localStorage) return;
+            if (e.key === DB_KEY || e.key === null) onExternalDBChange(false);
+        });
+        function onExternalDBChange(fromRestore) {
+            if (!folderDragging) renderDrawer();
+            if (currentState === 'home') { renderHomeContinue(); return; }
+            if (!currentFile) return;
+            const f = getDB().files.find(x => x.id === currentFile.id);
+            if (!f) {
+                if (currentState === 'read') { notify('这篇文档已在另一个页面被删除', 2600); }
+                return; // 编辑中：保存时会按原 id 存回去
+            }
+            if (f.title !== currentFile.title) {
+                currentFile.title = f.title;
+                headerUI.headerTitle.textContent = currentState === 'edit' ? "编辑: " + f.title : f.title;
+            }
+            if (currentState === 'read' && f.content !== currentFile.content) {
+                currentFile = { ...f };
+                const top = vRead.scrollTop;
+                disablePosSave();
+                renderMarkdown(f.content, readerContent).then(ok => {
+                    if (!ok || currentState !== 'read') return;
+                    generateTOC(); vRead.scrollTop = top; updateTocActive(); renderDraftBar(); enablePosSaveSoon();
+                });
+                if (!fromRestore) notify('已同步另一个页面的修改');
+            } else if (currentState === 'read') {
+                currentFile = { ...f };
+            }
+        }
+
+        // ================= Markdown 渲染及其他逻辑 =================
+        // 每个目标容器一个渲染序号。renderMarkdown 里有 await（按需加载语言包、Mermaid），
+        // 连续打字时前一次可能还没跑完下一次就开始了；没有这个序号的话，先开始、后结束的那次
+        // 会把旧内容盖回预览上（典型场景：刚敲出 ```kotlin 触发下载语言包，下一个字符的渲染
+        // 先完成，语言包到了之后上一次的渲染再把旧文本写回去）。
         const renderSeqs = new WeakMap();
+        let lastRenderCost = 0; // 上一次编辑预览「解析 + 写进页面」花了多少毫秒，决定下一次要不要等打字停顿
 
         // 返回 false 表示这次渲染已经被更新的一次取代、中途放弃了
+        // MathJax 排版的排队链：一次只跑一个 typesetPromise（见 renderMarkdown 里的说明）
+        let mathTypesetQueue = Promise.resolve();
+
         async function renderMarkdown(text, target) {
             const seq = (renderSeqs.get(target) || 0) + 1;
             renderSeqs.set(target, seq);
@@ -892,11 +2169,16 @@
             await ensureCodeLanguagesLoaded(body);
             if (stale()) return false;
 
-            // 【安全约束，不可改写】产出 HTML 的永远是完整的 marked.parse()：marked.use() 注册的 postprocess
-            // 钩子（DOMPurify.sanitize）只在这条完整流水线上生效，marked.lexer()+marked.parser([token]) 逐块渲染
-            // 不会触发它（实测验证过：同一段带 onerror 的内容，marked.parse() 正确剥离，逐块渲染原样漏过去）。
-            // 编辑预览的行号标记也是在这次 parse 的 processAllTokens 钩子里插的（见 annotateBlocks），同样经过净化。
+            // 安全约束（不能改）：产出 HTML 的永远是完整的 marked.parse()——marked.use() 注册的
+            // postprocess 钩子（DOMPurify.sanitize，防止 .md 文件里夹带的 <script>/onerror 被执行）
+            // 只在这条完整流水线上生效。marked.lexer()+marked.parser([token]) 逐块渲染不会触发
+            // 这个钩子（实测过：同一段带 onerror 的内容，marked.parse() 正确剥离，逐块渲染原样漏过去）。
+            //
+            // 编辑预览要做光标同步，需要知道每一块对应源码第几行：打开 markBlocks，让
+            // processAllTokens 钩子在每个顶层块前插一个空的行号标记（见上面 annotateBlocks 的说明）。
+            // 标记也在 marked.parse 里生成、同样经过 DOMPurify，不引入任何未净化的 HTML。
             const isPreview = target === editorPreview;
+            const t0 = performance.now();
             markBlocks = isPreview;
             markBlocksOut = [];
             let html;
@@ -904,50 +2186,113 @@
             const blocks = markBlocksOut;
             target.innerHTML = html;
 
-            // 列表项、嵌套列表项、表格行再各自打上起始行号，粒度细到"源码一行"
+            // 2026-08-02 用户实测反馈"左边点光标右边定位非常不精准"：只给顶层块打标粒度太粗，
+            // 一个章节的十几道题是一个列表、也就是一个块。所以列表项、嵌套列表项、表格行各自
+            // 再打上起始行号，粒度细到"源码一行"。只读 token 的 raw 算行号，不生成任何 HTML。
             if (isPreview) tagBlockDetails(target, blocks, markSrc);
 
-            // 打标必须在下面这些改动 DOM 的步骤之前完成：MathJax 排版、代码块包进
-            // .code-block-wrapper、mermaid 替换节点，都会打乱 target.children 的顺序
-            // 或层级。属性打在元素自身上，元素之后被移动也不影响——scrollPreviewToCursor
-            // 用 querySelectorAll('[data-start-line]') 取，不依赖它们还是不是直接子元素。
+            // 打标必须在下面这些改动 DOM 的步骤之前完成：MathJax 排版、代码块包进 .code-block-wrapper、
+            // mermaid 替换节点，都会打乱 target.children 的顺序或层级。属性打在元素自身上，元素之后被移动也不影响。
 
-            // 触发 MathJax 渲染：先判断文档里有没有 $ 公式，没有就完全不加载 MathJax；
-            // 有的话，加载/排版这段异步时间里先用 math-pending 把原始 \(...\) 源码藏起来，
-            // 避免用户看到一闪而过的 LaTeX 源文本，排版完成后再显现
+            // 触发 MathJax 渲染：先判断文档里有没有数学（docHasMath，四种定界符都认），没有就完全不加载 MathJax；
+            // 有的话，加载/排版这段异步时间里先用 math-pending 把原始 \(...\) 源码藏起来，排版完成后再显现。
+            let mathLoadMs = 0;
             if (docHasMath(body)) {
                 target.classList.add('math-pending');
+                const tl = performance.now();
                 await ensureMathJaxLoaded();
+                mathLoadMs = performance.now() - tl; // 第一次要下载 MathJax，这段网络时间不算进「渲染开销」
                 if (window.MathJax && window.MathJax.typesetPromise) {
-                    MathJax.typesetClear([target]);
-                    await MathJax.typesetPromise([target]).catch((err) => console.error('MathJax 渲染报错:', err));
+                    // 排版一次只跑一个：阅读区和编辑预览可能前后脚都要排版（比如刚保存、回到阅读页），
+                    // 两次 typesetPromise 同时跑有排错的风险，这里排队串起来（mathTypesetQueue 见下面函数外）
+                    const run = mathTypesetQueue.then(() => { MathJax.typesetClear([target]); return MathJax.typesetPromise([target]); });
+                    mathTypesetQueue = run.catch(() => {});
+                    await run.catch((err) => console.error('MathJax 渲染报错:', err));
                 }
                 target.classList.remove('math-pending');
                 if (stale()) return false;
             }
 
+            // 标题锚点：使用 GitHub 风格 slug，支持文档内 [文字](#标题) 跳转。
+            // 脚注区自带的「脚注」标题已经有 id（脚注链接靠它），不动。
             const usedSlugs = new Set();
-            // 脚注区自带的「脚注」标题已经有 id（脚注链接靠它），不动
-            target.querySelectorAll('h1, h2, h3, h4, h5, h6').forEach((heading) => { if (heading.closest('.footnotes')) return; heading.id = slugify(heading.textContent, usedSlugs); });
-            
-            target.querySelectorAll('pre code').forEach((block) => {
-                const pre = block.parentNode; if (pre.parentNode.classList.contains('code-block-wrapper')) return;
-                const copyBtn = document.createElement('button'); copyBtn.className = 'copy-code-btn'; copyBtn.innerHTML = '<i class="fas fa-copy"></i>';
-                copyBtn.onclick = () => { navigator.clipboard.writeText(block.textContent).then(() => { copyBtn.innerHTML = '<i class="fas fa-check"></i>'; setTimeout(() => copyBtn.innerHTML = '<i class="fas fa-copy"></i>', 2000); }); };
-                const wrapper = document.createElement('div'); wrapper.className = 'code-block-wrapper'; pre.parentNode.insertBefore(wrapper, pre); wrapper.appendChild(pre); wrapper.appendChild(copyBtn);
+            target.querySelectorAll('h1, h2, h3, h4, h5, h6').forEach((heading) => {
+                if (heading.closest('.footnotes')) return;
+                heading.id = slugify(heading.textContent, usedSlugs);
             });
-            
+
+            // 外部链接在新标签页打开，不把阅读器整个换掉（P3-1）。DOMPurify 默认会删掉 target 属性，
+            // 所以在净化之后、在 DOM 上加；rel=noopener 让新页面拿不到这一页。
+            target.querySelectorAll('a[href]').forEach((a) => {
+                const href = a.getAttribute('href');
+                if (!/^https?:\/\//i.test(href)) return;
+                try { if (new URL(href).origin === location.origin) return; } catch (_) { return; }
+                a.target = '_blank';
+                a.rel = 'noopener noreferrer';
+            });
+
+            // 代码块复制按钮：用外层 wrapper 承载按钮，避免 pre 横向滚动时按钮跟着移动
+            target.querySelectorAll('pre code').forEach((block) => {
+                const pre = block.parentNode;
+                if (pre.parentNode.classList.contains('code-block-wrapper')) return;
+                const copyBtn = document.createElement('button'); copyBtn.className = 'copy-code-btn'; copyBtn.innerHTML = '<i class="fas fa-copy"></i>';
+                copyBtn.setAttribute('aria-label', '复制代码');
+
+                copyBtn.onclick = () => { navigator.clipboard.writeText(block.textContent).then(() => { copyBtn.innerHTML = '<i class="fas fa-check"></i>'; setTimeout(() => copyBtn.innerHTML = '<i class="fas fa-copy"></i>', 2000); }); };
+                const wrapper = document.createElement('div');
+                wrapper.className = 'code-block-wrapper';
+                pre.parentNode.insertBefore(wrapper, pre);
+
+                wrapper.appendChild(pre);
+                wrapper.appendChild(copyBtn);
+            });
+            if (isPreview) lastRenderCost = performance.now() - t0 - mathLoadMs;
+
+            // Mermaid 图表：将 ```mermaid 代码块转换为图表，复制按钮一并迁移到图表容器上
             const mermaidBlocks = target.querySelectorAll('pre code.language-mermaid');
             if (mermaidBlocks.length > 0) {
                 mermaidBlocks.forEach((block) => {
-                    const pre = block.parentNode; const codeWrapper = pre.parentNode; const wrapper = document.createElement('div'); wrapper.className = 'mermaid-wrapper';
-                    const graph = document.createElement('div'); graph.className = 'mermaid'; graph.textContent = block.textContent; graph.dataset.source = block.textContent; wrapper.appendChild(graph);
-                    const copyBtn = codeWrapper.querySelector('.copy-code-btn'); if (copyBtn) wrapper.appendChild(copyBtn); codeWrapper.replaceWith(wrapper);
+                    const pre = block.parentNode;
+                    const codeWrapper = pre.parentNode;
+                    const wrapper = document.createElement('div');
+                    wrapper.className = 'mermaid-wrapper';
+                    const graph = document.createElement('div');
+                    graph.className = 'mermaid';
+                    graph.textContent = block.textContent;
+                    // 记下源码：切换深色/浅色时要按新主题重画（见 setTheme）
+                    graph.dataset.source = block.textContent;
+
+                    wrapper.appendChild(graph);
+                    const copyBtn = codeWrapper.querySelector('.copy-code-btn');
+                    if (copyBtn) wrapper.appendChild(copyBtn);
+                    codeWrapper.replaceWith(wrapper);
                 });
-                mermaid.initialize({ startOnLoad: false, theme: document.body.getAttribute('data-theme') === 'dark' ? 'dark' : 'default' });
-                if (!stale()) await mermaid.run({ nodes: target.querySelectorAll('.mermaid') });
+                if (!stale()) await runMermaid(Array.from(target.querySelectorAll('.mermaid[data-source]')), stale);
             }
             return !stale();
+        }
+
+        // 一张一张画，某一张写错了只在它的位置显示提示，不影响别的图和后面的目录。
+        // 原来整批 await mermaid.run 出错没接住：异常冒出去，阅读页的目录停在上一篇（P2-1）。
+        async function runMermaid(nodes, isStale) {
+            mermaid.initialize({ startOnLoad: false, theme: document.body.getAttribute('data-theme') === 'dark' ? 'dark' : 'default' });
+            for (const node of nodes) {
+                if (isStale && isStale()) return;
+                try { await mermaid.run({ nodes: [node] }); }
+                catch (err) { showMermaidError(node, err); }
+            }
+        }
+        function showMermaidError(node, err) {
+            node.removeAttribute('data-processed');
+            node.textContent = '';
+            const box = document.createElement('div'); box.className = 'mermaid-error';
+            const msg = String((err && (err.message || err.str)) || err || '').split('\n').filter(Boolean)[0] || '';
+            box.textContent = '图表语法有误' + (msg ? '：' + msg.slice(0, 160) : '');
+            const pre = document.createElement('pre'); pre.textContent = node.dataset.source || '';
+            box.appendChild(pre);
+            node.appendChild(box);
+            // Mermaid 出错时会在 body 末尾留下一个画着「Syntax error」的临时元素，清掉
+            document.querySelectorAll('body > [id^="dmermaid"], body > [id^="mermaid-"]').forEach(el => el.remove());
         }
 
         // 一个行号标记管辖的元素：从它后面一个开始，到下一个标记为止
@@ -958,8 +2303,9 @@
         }
 
         function tagBlockDetails(target, blocks, src) {
-            // 按 raw 在源码里的出现位置定位每个列表项。cursor 必须严格随文档顺序推进——否则内容完全相同
-            // 的两行（题目整理这类高度重复的文档里很常见）会被一起匹配到最前面那一处。
+            // 按 raw 在源码里的出现位置定位每个列表项。cursor 是"从哪里开始往后找"的游标，
+            // 必须严格随文档顺序推进——否则内容完全相同的两行（判断题这种高度重复的文档里
+            // 很常见）会被一起匹配到最前面那一处，行号全部算错。
             function tagList(items, listEl, listOffset) {
                 let cursor = listOffset;
                 items.forEach((item, j) => {
@@ -969,6 +2315,7 @@
                     const li = listEl.children[j];
                     if (li && li.tagName === 'LI') {
                         li.dataset.startLine = (src.slice(0, idx).match(/\n/g) || []).length;
+                        // 嵌套列表：item.tokens 里 type==='list' 的那些，按顺序对应这个 li 底下的 ul/ol
                         const nestedEls = Array.from(li.children).filter(c => c.tagName === 'UL' || c.tagName === 'OL');
                         (item.tokens || []).filter(t => t.type === 'list').forEach((nt, k) => {
                             if (nestedEls[k] && Array.isArray(nt.items)) tagList(nt.items, nestedEls[k], idx);
@@ -977,7 +2324,8 @@
                     cursor = idx + raw.length;
                 });
             }
-            // GFM 表格源码结构固定：第1行表头、第2行分隔线、之后每行一条数据，行号直接推算
+            // GFM 表格的源码结构是固定的：第1行表头、第2行分隔线、之后每行一条数据行，
+            // 行号直接按顺序推算（单元格内容重复率高，去源码里搜反而容易匹配错位置）
             function tagTable(tableEl, startLine) {
                 const headRow = tableEl.querySelector('thead tr');
                 if (headRow) headRow.dataset.startLine = startLine;
@@ -992,9 +2340,10 @@
             });
         }
 
-        // 源码第 line 行 → 预览里的定位点（整块、列表项或表格行）。文档顺序下起始行号单调不减，
-        // 所以"取最后一个 <= 光标行"可以遇到更大的就 break。渲染不出元素的块（链接定义、HTML 注释）
-        // 没有位置可去，跳过，落到前一个点上。
+        // 源码第 line 行 → 预览里的定位点（整块、列表项或表格行）。
+        // querySelectorAll 返回文档顺序，文档顺序下起始行号单调不减（标记在它那块内容前面、
+        // 父列表项 <= 子项），所以"取最后一个 <= 光标行"可以遇到更大的就 break。
+        // 渲染不出任何元素的块（链接定义、HTML 注释、脚注定义）没有位置可去，跳过，落到前一个点上。
         function locatePreviewLine(container, line) {
             let hit = null;
             for (const point of container.querySelectorAll('[data-start-line]')) {
@@ -1016,41 +2365,128 @@
             }
             return { top, height, startLine: Number(hit.dataset.startLine), endLine: Number(hit.dataset.endLine), flash };
         }
-        
+
+        // ================= 目录 =================
+        let tocLinks = [];
+        let hasToc = false;
+        // 电脑上目录栏可以收起（记住选择）；文档没有标题时自动收起，阅读区更宽
+        let tocHiddenPref = lsGet('mdr-toc-hidden') === '1';
+
         function generateTOC() {
-            tocContent.innerHTML = ''; const headings = Array.from(readerContent.querySelectorAll('h1, h2, h3, h4')).filter(h => !h.closest('.footnotes')); /* 脚注区的读屏标题不进目录 */ if(headings.length === 0) return tocContent.innerHTML = '<div style="padding:20px;color:#888;">暂无目录</div>';
+            tocContent.innerHTML = '';
+            tocLinks = [];
+            // 脚注区自带一个读屏用的「脚注」标题（视觉上藏起来了），不进目录
+            const headings = Array.from(readerContent.querySelectorAll('h1, h2, h3, h4')).filter(h => !h.closest('.footnotes'));
+            hasToc = headings.length > 0;
+            if (!hasToc) tocContent.innerHTML = '<div class="toc-empty">暂无目录</div>';
             headings.forEach(h => {
-                const link = document.createElement('a'); link.href = `#${h.id}`; link.className = `toc-link toc-${h.tagName.toLowerCase()}`; link.innerText = h.innerText;
-                link.onclick = (e) => { e.preventDefault(); h.scrollIntoView({ behavior: 'smooth', block: 'start' }); if (window.innerWidth < 768) tocOverlay.onclick(); };
+                const link = document.createElement('a'); link.href = `#${h.id}`; link.className = `toc-link toc-${h.tagName.toLowerCase()}`; link.textContent = h.textContent;
+                link.onclick = (e) => { e.preventDefault(); scrollToInPane(h, vRead); if (isMobileWidth()) closeTocMobile(); };
                 tocContent.appendChild(link);
+                tocLinks.push({ h, link });
             });
+            updateTocLayout();
         }
-        
+
+        function updateTocLayout() {
+            if (currentState !== 'read') return;
+            if (isMobileWidth()) {
+                tocSidebar.classList.add('collapsed');
+                btnFabToc.classList.toggle('hidden', !hasToc);
+            } else {
+                tocSidebar.classList.toggle('collapsed', !hasToc || tocHiddenPref);
+                headerUI.btnTocToggle.classList.toggle('hidden', !hasToc);
+                headerUI.btnTocToggle.classList.toggle('active', hasToc && !tocHiddenPref);
+                headerUI.btnTocToggle.title = tocHiddenPref ? '展开目录' : '收起目录';
+            }
+        }
+        headerUI.btnTocToggle.onclick = () => {
+            tocHiddenPref = !tocHiddenPref;
+            lsSet('mdr-toc-hidden', tocHiddenPref ? '1' : '0');
+            updateTocLayout();
+        };
+
+        // 高亮「当前读到的这一节」：视口顶部往下 80px 以内最后一个标题；滚到底时取最后一个露出来的
+        let activeTocLink = null;
+        function updateTocActive() {
+            if (currentState !== 'read' || !tocLinks.length) return;
+            const vr = vRead.getBoundingClientRect();
+            const atBottom = vRead.scrollTop + vRead.clientHeight >= vRead.scrollHeight - 2;
+            let cur = null;
+            for (const t of tocLinks) {
+                const top = t.h.getBoundingClientRect().top;
+                if (top <= vr.top + 80 || (atBottom && top < vr.bottom)) cur = t; else break;
+            }
+            const link = cur ? cur.link : null;
+            if (link === activeTocLink) return;
+            if (activeTocLink) activeTocLink.classList.remove('active');
+            activeTocLink = link;
+            if (!link) return;
+            link.classList.add('active');
+            // 高亮的那条滚出目录栏可视范围时，把它带回来（只滚目录栏自己）
+            const sr = tocSidebar.getBoundingClientRect(), lr = link.getBoundingClientRect();
+            if (sr.height > 0 && (lr.top < sr.top + 40 || lr.bottom > sr.bottom - 40)) tocSidebar.scrollTop += lr.top - sr.top - sr.height / 3;
+        }
+
+        let tocRaf = 0;
+        vRead.addEventListener('scroll', () => {
+            if (currentState !== 'read') return;
+            if (!tocRaf) tocRaf = requestAnimationFrame(() => { tocRaf = 0; updateTocActive(); });
+            if (!posSaveEnabled) return;
+            posDirty = true;
+            if (!posSaveTimer) posSaveTimer = setTimeout(() => { posSaveTimer = null; saveReadPos(); }, 400);
+        }, { passive: true });
+
+        // 把 el 滚到 pane 顶部（留一点间距）。只滚 pane 自己——scrollIntoView 会连带滚动所有能滚的祖先。
+        function scrollToInPane(el, pane, smooth = true) {
+            const top = pane.scrollTop + el.getBoundingClientRect().top - pane.getBoundingClientRect().top - 12;
+            pane.scrollTo({ top: Math.max(0, top), behavior: smooth ? 'smooth' : 'auto' });
+        }
+
+        // 页内链接 [文字](#标题) 和脚注：在「自己这个容器」里找目标再滚动。
+        // 阅读区和编辑预览里有同名 id，原来交给浏览器跳，它跳到隐藏着的那一份上，编辑预览里点了不动（P3-5）。
+        function handleHashLink(e, container, pane) {
+            const a = e.target.closest && e.target.closest('a[href^="#"]');
+            if (!a || !container.contains(a)) return;
+            let id = a.getAttribute('href').slice(1);
+            try { id = decodeURIComponent(id); } catch (_) {}
+            if (!id) return;
+            const t = container.querySelector(`[id="${CSS.escape(id)}"]`);
+            if (!t) return;
+            e.preventDefault();
+            scrollToInPane(t, pane);
+        }
+        readerContent.addEventListener('click', e => handleHashLink(e, readerContent, vRead));
+        editorPreview.addEventListener('click', e => handleHashLink(e, editorPreview, previewPane));
+
         function flashHighlight(els) {
             editorPreview.querySelectorAll('.sync-highlight').forEach(n => n.classList.remove('sync-highlight'));
             if (!els || !els.length) return;
-            void els[0].offsetWidth; // 强制回流，让重新加上 class 能重播动画
+            void els[0].offsetWidth; // force reflow so re-adding the class restarts the animation
             els.forEach(el => el.classList.add('sync-highlight'));
             setTimeout(() => els.forEach(el => el.classList.remove('sync-highlight')), 900);
         }
 
         function scrollPreviewToCursor() {
+            if (!previewVisible()) return;
             const value = editorTextarea.value;
-            // 预览渲染的是去掉 YAML front matter 之后的正文（stripFrontMatter），行号按正文算；光标行号却是按
-            // 整个编辑框算的。原来没扣掉这一段，带 front matter 的文档光标同步整体错开头部那几行
-            //（2026-10-07 实测：光标在「第25段」预览停在「第27段」）。
+            // 预览渲染的是去掉 YAML front matter 之后的正文（stripFrontMatter），行号是按正文算的；
+            // 光标行号却是按整个编辑框算的。原来没扣掉这一段，带 front matter 的文档光标同步
+            // 会整体错开 front matter 那么多行（2026-10-06 发现）。
             const fmLength = value.length - stripFrontMatter(value).length;
             const fmLines = (value.slice(0, fmLength).match(/\n/g) || []).length;
             const cursorLine = (value.slice(0, editorTextarea.selectionStart).match(/\n/g) || []).length - fmLines;
             const hit = locatePreviewLine(editorPreview, cursorLine);
             if (!hit) return;
-            // 不用 scrollIntoView({block:'center'})：它会连带滚动所有可滚动祖先，目标比可视区高时"居中"会把开头顶出屏幕，
-            // 而且光标那一行应当顶到最上面。直接算 .preview-pane（真正带 overflow-y:auto 的那层）该滚多少。
-            const TOP_GAP = 12;
-            const pane = editorPreview.closest('.preview-pane') || editorPreview.parentElement;
+            // 顶部对齐（不是 scrollIntoView center）：用户明确反馈"光标那一行在右边应该定位到最上面"，
+            // 参照的是 MyKnowledgeBase 里同名功能（目标顶边对齐容器顶边、留一点呼吸间距）。
+            // 直接算 .preview-pane（真正带 overflow-y:auto 的那一层）该滚多少，不连带滚动页面本身。
+            const TOP_GAP = 12; // 跟 MyKnowledgeBase 的 scrollPreviewToCursor 保持同一个数值
+            const pane = previewPane;
             if (!pane) return;
             const paneRect = pane.getBoundingClientRect();
-            // 目标比可视区还高时（长代码块这种块内没有更细元素可选的情况），按"光标在这块的第几行"在块内插值
+            // 目标比可视区还高时（长代码块、超长段落这种块内部没有更细元素可选的情况），
+            // 按"光标在这块的第几行"在块内部按比例插值，把光标那一行本身顶到最上面。
             let anchorTop = hit.top;
             if (hit.height >= paneRect.height) {
                 const span = Number.isFinite(hit.endLine) && hit.endLine > hit.startLine ? hit.endLine - hit.startLine : 0;
@@ -1061,72 +2497,255 @@
             flashHighlight(hit.flash);
         }
 
+        // ================= 编辑预览：等打字停顿再渲染 + 手机上的编辑/预览标签 =================
+        // 原来每敲一个字整篇重新渲染：1950 行的文档电脑上每次按键约 137 毫秒，手机上更慢、打字跟不上（P2-6）。
+        // 现在：上一次渲染很快（< 30ms，小文档）就照旧立刻渲染；慢的话等打字停顿 150ms 再渲染一次。
+        // Mermaid 图也跟着只在停下来时重画。手机上在「编辑」标签时预览看不见，干脆不渲染，切到「预览」时再渲染。
+        let editTab = 'edit', previewDirty = false, previewTimer = null;
+        function previewVisible() { return currentState === 'edit' && (!isMobileWidth() || editTab === 'preview'); }
+        function schedulePreview(immediate) {
+            previewDirty = true;
+            clearTimeout(previewTimer);
+            if (!previewVisible()) return;
+            previewTimer = setTimeout(flushPreview, immediate || lastRenderCost < 30 ? 0 : 150);
+        }
+        async function flushPreview() {
+            clearTimeout(previewTimer);
+            // 已经离开编辑页了（比如敲完字立刻 Ctrl+S）：别再在看不见的预览上整篇渲染一遍
+            if (currentState !== 'edit' || !previewDirty) return;
+            previewDirty = false;
+            // 只有没被后来的渲染取代的那一次才去定位，免得旧的那次跑完把预览滚回旧位置
+            if (await renderMarkdown(editorTextarea.value, editorPreview)) scrollPreviewToCursor();
+        }
+        function setEditTab(tab, sync = true) {
+            editTab = tab;
+            vEdit.classList.toggle('tab-edit', tab === 'edit');
+            vEdit.classList.toggle('tab-preview', tab === 'preview');
+            tabEditBtn.classList.toggle('on', tab === 'edit'); tabEditBtn.setAttribute('aria-selected', tab === 'edit');
+            tabPreviewBtn.classList.toggle('on', tab === 'preview'); tabPreviewBtn.setAttribute('aria-selected', tab === 'preview');
+            if (!sync) return;
+            // 切到预览：有没渲染的改动先渲染，然后定位到光标所在的那一块
+            if (tab === 'preview') { if (previewDirty) flushPreview(); else scrollPreviewToCursor(); }
+        }
+        tabEditBtn.onclick = () => setEditTab('edit');
+        tabPreviewBtn.onclick = () => setEditTab('preview');
+
         const CURSOR_MOVE_KEYS = new Set(['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Home', 'End', 'PageUp', 'PageDown']);
         editorTextarea.addEventListener('click', scrollPreviewToCursor);
         editorTextarea.addEventListener('keyup', e => { if (CURSOR_MOVE_KEYS.has(e.key)) scrollPreviewToCursor(); });
-        // renderMarkdown 内部 await 了 MathJax 排版，所以 await 之后再定位，量到的才是排版后的最终位置；
-        // 只有没被后来的渲染取代的那一次才去定位，免得旧的那次跑完把预览滚回旧位置
-        editorTextarea.addEventListener('input', async e => { if (await renderMarkdown(e.target.value, editorPreview)) scrollPreviewToCursor(); });
-        document.getElementById('menu-new').onclick = () => { const title = prompt("新文档名称：", "未命名文档"); if (title) { currentFile = { id: Date.now().toString(), title, content: `# ${title}\n\n` }; saveToCurrentFolder(currentFile); closeDrawer(); switchState('edit'); } };
-        
-        // 示例按钮：可以直接验证你截图里的公式了！
-        headerUI.btnHomeSample.onclick = () => { 
-            currentFile = { id: 'sample', title: '示例：概率公式测试', content: '这是一些概率论公式的测试：\n\n1. 单选选项：则 $P\\{X^2 = 1\\} = $ （B）\n2. 分布函数：则 $P\\{X \\leq 2\\} = $ （B）\n3. 二维分布：则 $P\\{6 < X \\leq 8, 5 < Y \\leq 10\\} = $ ( A )' }; 
-            saveToCurrentFolder(currentFile); 
-            switchState('read'); 
+        editorTextarea.addEventListener('input', () => { scheduleDraftSave(); schedulePreview(false); });
+
+        // ================= 快捷键 =================
+        // 编辑框里 Tab 缩进 / Shift+Tab 取消缩进（写嵌套列表要用；4 个空格，无序、有序列表都能嵌套）。
+        // 用 execCommand('insertText') 插入：走浏览器自己的输入流程，Ctrl+Z 能撤销；不支持时退回 setRangeText。
+        const INDENT = '    ';
+        function insertAtSelection(text) {
+            editorTextarea.focus();
+            let ok = false;
+            try { ok = document.execCommand('insertText', false, text); } catch (_) { ok = false; }
+            if (!ok) {
+                editorTextarea.setRangeText(text, editorTextarea.selectionStart, editorTextarea.selectionEnd, 'end');
+                editorTextarea.dispatchEvent(new Event('input', { bubbles: true }));
+            }
+        }
+        editorTextarea.addEventListener('keydown', (e) => {
+            if (e.key !== 'Tab' || e.ctrlKey || e.metaKey || e.altKey || e.isComposing) return;
+            e.preventDefault();
+            const ta = editorTextarea, v = ta.value, s = ta.selectionStart, en = ta.selectionEnd;
+            if (s === en && !e.shiftKey) { insertAtSelection(INDENT); return; }
+            // 选中了多行（或 Shift+Tab）：对涉及到的每一行整体缩进 / 取消缩进
+            const lineStart = v.lastIndexOf('\n', s - 1) + 1;
+            const endAdj = en > s && v[en - 1] === '\n' ? en - 1 : en;
+            const lineEndIdx = v.indexOf('\n', endAdj);
+            const lineEnd = lineEndIdx === -1 ? v.length : lineEndIdx;
+            const lines = v.slice(lineStart, lineEnd).split('\n');
+            const out = e.shiftKey ? lines.map(l => l.replace(/^( {1,4}|\t)/, '')) : lines.map(l => INDENT + l);
+            const block = out.join('\n');
+            if (block === v.slice(lineStart, lineEnd)) return;
+            ta.setSelectionRange(lineStart, lineEnd);
+            insertAtSelection(block);
+            ta.setSelectionRange(lineStart, lineStart + block.length);
+        });
+
+        // Ctrl/⌘+S 保存（原来会弹出浏览器的「网页另存为」）；Esc 关掉最上面的那一层（侧边栏、菜单、目录、提示）
+        document.addEventListener('keydown', (e) => {
+            // 弹框开着时按键交给弹框；但 Ctrl/⌘+S 还是要拦下浏览器的「网页另存为」
+            if (dialogOpen) { if ((e.ctrlKey || e.metaKey) && (e.key === 's' || e.key === 'S')) e.preventDefault(); return; }
+            if ((e.ctrlKey || e.metaKey) && !e.altKey && !e.shiftKey && (e.key === 's' || e.key === 'S')) {
+                if (currentState === 'edit') { e.preventDefault(); saveEdit(); }
+                return;
+            }
+            if (e.key !== 'Escape') return;
+            if (actionMenu.classList.contains('show')) { e.preventDefault(); closeActionMenu(); return; }
+            if (tocSidebar.classList.contains('mobile-open')) { e.preventDefault(); closeTocMobile(); return; }
+            if (drawerOpen) {
+                e.preventDefault();
+                if (document.activeElement === searchInput && searchInput.value) { searchClear.onclick(); return; }
+                closeDrawer(); return;
+            }
+            if (titleTooltip.classList.contains('show')) { titleTooltip.classList.remove('show'); return; }
+            if (resumePill.classList.contains('show')) { hideResumePill(); return; }
+        });
+
+        // ================= 新建文档 / 示例 =================
+        document.getElementById('menu-new').onclick = async () => {
+            if (!(await confirmLeaveEdit())) return;
+            const title = await promptAsk('新建文档', '未命名文档', '创建', '文档名称');
+            if (!title) return;
+            const file = createFile(title, `# ${title}\n\n`, '浏览器本地存储空间已满（或被禁用），新文档没有建起来。\n请删掉一些不用的文档后重试。');
+            if (!file) return;
+            currentFile = { ...file }; closeDrawer(); switchState('edit');
         };
-        
-        // ================= 阅读区字号缩放（0.8~1.4，步进 0.1，存到 localStorage） =================
-        // 存储键跟 markdown-reader 用同一个 md-font-scale：两个站在同一个域名 fjkkx77.github.io 下、本来就共用
-        // localStorage（文档库 md-pro-db、主题 md-theme 也是共用的），字号偏好跟着一起同步，行为一致。
-        // localStorage 在隐私模式/禁用存储时会抛异常，读写都接住：存不了就只在当前页面生效。
-        let mdFontScale = 1;
-        try { mdFontScale = parseFloat(localStorage.getItem('md-font-scale')) || 1; } catch (_) {}
-        mdFontScale = Math.min(1.4, Math.max(0.8, mdFontScale));
+
+        // 示例文档。已经有了就直接打开（原来每次都用默认内容覆盖，你改过的示例会被悄悄改回去）。
+        // id 用 sample-math，不用 sample：两个站共用一个文档库，markdown-reader 的示例也叫 sample，
+        // 原来两边点「示例」会互相覆盖对方的示例。以前存下的那篇 sample（三道概率题）留在库里不动，
+        // 它现在就是一篇普通文档；新示例里也收了那三道题。
+        const SAMPLE_ID = 'sample-math';
+        const SAMPLE_TITLE = '示例：数学公式与功能展示';
+        const SAMPLE_CONTENT = [
+            '# 示例：数学公式与功能展示',
+            '',
+            '这篇示例展示这个阅读器能显示哪些内容。它就存在你的文档库里，可以随便改；改过之后再点「示例」，打开的还是你改过的这一篇。',
+            '',
+            '## 公式的四种写法',
+            '',
+            '行内 `$…$`：质能方程$E = mc^2$，中文紧贴着写也能识别。',
+            '',
+            '行内 `\\(…\\)`：勾股定理 \\(a^2 + b^2 = c^2\\)。',
+            '',
+            '行间 `$$…$$`：',
+            '',
+            '$$',
+            '\\int_0^1 x^2 \\, dx = \\frac{1}{3}',
+            '$$',
+            '',
+            '行间 `\\[…\\]`：',
+            '',
+            '\\[ P(A \\mid B) = \\frac{P(AB)}{P(B)} \\]',
+            '',
+            '金额不会被当成公式：这本书 $25，那本 $30。',
+            '',
+            '## 概率题',
+            '',
+            '1. 单选选项：则 $P\\{X^2 = 1\\} = $ （B）',
+            '2. 分布函数：则 $P\\{X \\leq 2\\} = $ （B）',
+            '3. 二维分布：则 $P\\{6 < X \\leq 8, 5 < Y \\leq 10\\} = $ ( A )',
+            '',
+            '> [!TIP]',
+            '> 提示框：还有 NOTE / IMPORTANT / WARNING / CAUTION 四种。',
+            '',
+            '## 表格',
+            '',
+            '| 分布 | 期望 | 方差 |',
+            '|---|---|---|',
+            '| 二项分布 $B(n,p)$ | $np$ | $np(1-p)$ |',
+            '| 泊松分布 $P(\\lambda)$ | $\\lambda$ | $\\lambda$ |',
+            '| 正态分布 $N(\\mu,\\sigma^2)$ | $\\mu$ | $\\sigma^2$ |',
+            '',
+            '## 图表（Mermaid）',
+            '',
+            '```mermaid',
+            'flowchart LR',
+            '    A[读题] --> B{会做吗}',
+            '    B -- 会 --> C[写答案]',
+            '    B -- 不会 --> D[翻笔记]',
+            '```',
+            '',
+            '## 脚注',
+            '',
+            '这句话后面有一个脚注[^1]，点它可以跳到文末。',
+            '',
+            '[^1]: 这里是脚注的内容，点右边的箭头回到原处。',
+            ''
+        ].join('\n');
+        headerUI.btnHomeSample.onclick = async () => {
+            const existing = getDB().files.find(f => f.id === SAMPLE_ID);
+            if (!existing) {
+                const ok = mutateDB(db => {
+                    const ex = db.files.find(f => f.id === SAMPLE_ID);
+                    if (ex) { ex.title = SAMPLE_TITLE; ex.content = SAMPLE_CONTENT; ex.timestamp = Date.now(); }
+                    else db.files.unshift({ id: SAMPLE_ID, title: SAMPLE_TITLE, content: SAMPLE_CONTENT, timestamp: Date.now(), isPinned: false, folderId: 'root' });
+                }, '浏览器本地存储空间已满（或被禁用），示例文档没有存进来。');
+                if (!ok) return;
+            }
+            await openDoc(SAMPLE_ID);
+        };
+
+        // ================= 深浅色 =================
+        // 没手动选过时跟着系统变（晚上系统切深色，页面也跟着变）；在这里手动点过就按你点的来。
+        // 手动选回「跟系统当前一样」的那一种，就当作恢复跟随系统。
+        // 手动选择记在 mdr-theme-choice（跟数学公式阅读器共用：两站手动选的深浅色是同一个）。md-theme 是两站共用的老键，
+        // 旧版每次打开页面都会写它，分不清是不是手动选的，所以只在第一次升级时用它推断一次：跟系统不一样，说明当初是手动选的。
+        const darkMQ = window.matchMedia('(prefers-color-scheme: dark)');
+        if (lsGet('mdr-theme-migrated') !== '1') {
+            const legacy = lsGet('md-theme');
+            if ((legacy === 'dark' || legacy === 'light') && (legacy === 'dark') !== darkMQ.matches) lsSet('mdr-theme-choice', legacy);
+            lsSet('mdr-theme-migrated', '1');
+        }
+        function toggleTheme() {
+            const toDark = document.body.getAttribute('data-theme') !== 'dark';
+            if (toDark === darkMQ.matches) lsRemove('mdr-theme-choice');
+            else lsSet('mdr-theme-choice', toDark ? 'dark' : 'light');
+            lsSet('md-theme', toDark ? 'dark' : 'light');
+            setTheme(toDark);
+        }
+        headerUI.btnTheme.onclick = toggleTheme;
+        const onSystemTheme = (e) => { if (!lsGet('mdr-theme-choice')) setTheme(e.matches); };
+        if (darkMQ.addEventListener) darkMQ.addEventListener('change', onSystemTheme); else if (darkMQ.addListener) darkMQ.addListener(onSystemTheme);
+
+        // 原来是 window.onresize = () => switchState(currentState)：每次窗口尺寸变化都整个重走一遍
+        // 状态切换——编辑状态下会把编辑框重置成 currentFile.content，**没保存的修改全部丢失**
+        // （2026-10-06 实测：手机转屏、电脑拖窗口大小、软键盘把视口挤小都会触发）；阅读状态下也是
+        // 每一帧都把整篇重新渲染一遍。真正需要随宽度变的只有顶栏按钮和目录栏，而且只在跨过 768
+        // 断点的那一下才变，所以只在跨断点时刷新外壳，不碰内容。
+        let lastIsMobile = isMobileWidth();
+        window.addEventListener('resize', () => {
+            const isMobile = isMobileWidth();
+            if (isMobile === lastIsMobile) return;
+            lastIsMobile = isMobile;
+            if (!isMobile) closeTocMobile();
+            applyChrome(currentState);
+            // 从手机宽度变成电脑宽度：预览露出来了，有没渲染的改动就补上
+            if (currentState === 'edit' && previewDirty && previewVisible()) schedulePreview(true);
+        });
+
+        // ================= 阅读区字号缩放（0.8~1.4，步进0.1，存到 localStorage） =================
+        let mdFontScale = Math.min(1.4, Math.max(0.8, parseFloat(lsGet('md-font-scale')) || 1));
         function applyFontScale() { document.documentElement.style.setProperty('--md-font-scale', mdFontScale); }
-        function saveFontScale() { try { localStorage.setItem('md-font-scale', mdFontScale); } catch (_) {} }
         function changeFontScale(delta) {
             mdFontScale = Math.min(1.4, Math.max(0.8, +(mdFontScale + delta).toFixed(2)));
-            saveFontScale();
+            lsSet('md-font-scale', mdFontScale);
             applyFontScale();
         }
-        function resetFontScale() { mdFontScale = 1; saveFontScale(); applyFontScale(); }
+        function resetFontScale() { mdFontScale = 1; lsSet('md-font-scale', 1); applyFontScale(); }
         headerUI.btnFontDec.onclick = () => changeFontScale(-0.1);
         headerUI.btnFontInc.onclick = () => changeFontScale(0.1);
         headerUI.btnFontReset.onclick = resetFontScale;
         applyFontScale();
 
-        function toggleTheme() { setTheme(document.body.getAttribute('data-theme') !== 'dark'); }
-        headerUI.btnTheme.onclick = toggleTheme;
-        // 原来是 window.onresize = () => switchState(currentState)：每次窗口尺寸变化都整个重走一遍状态切换——
-        // 编辑状态下会把编辑框重置成 currentFile.content，没保存的修改全部丢失（2026-10-07 实测；
-        // 手机转屏、电脑拖窗口大小都会触发）；阅读状态下也是每一帧都把整篇连同 MathJax 重新排版一遍。
-        // 真正需要随宽度变的只有顶栏按钮和目录栏，而且只在跨过 768 断点时才变。
-        let lastIsMobile = window.innerWidth < 768;
-        window.addEventListener('resize', () => {
-            const isMobile = window.innerWidth < 768;
-            if (isMobile === lastIsMobile) return;
-            lastIsMobile = isMobile;
-            applyChrome(currentState);
-        });
 
         function setTheme(isDark) {
-            document.body.setAttribute('data-theme', isDark ? 'dark' : 'light'); headerUI.btnTheme.innerHTML = isDark ? '<i class="fas fa-sun"></i>' : '<i class="fas fa-moon"></i>';
-            localStorage.setItem('md-theme', isDark ? 'dark' : 'light'); document.getElementById('md-style').href = `https://cdnjs.cloudflare.com/ajax/libs/github-markdown-css/5.5.0/github-markdown-${isDark ? 'dark' : 'light'}.min.css`;
-            document.getElementById('hljs-style').href = `https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/${isDark ? 'github-dark' : 'github'}.min.css`;
+            document.body.setAttribute('data-theme', isDark ? 'dark' : 'light');
+            headerUI.btnTheme.innerHTML = isDark ? '<i class="fas fa-sun"></i>' : '<i class="fas fa-moon"></i>';
+            mdStyleLink.href = `https://cdnjs.cloudflare.com/ajax/libs/github-markdown-css/5.5.0/github-markdown-${isDark ? 'dark' : 'light'}.min.css`;
+            hljsStyleLink.href = `https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/${isDark ? 'github-dark' : 'github'}.min.css`;
             rerenderMermaid();
         }
-        // 切换深色/浅色后，已经画好的 Mermaid 图要按新主题重画（renderMarkdown 画图时把源码记在 data-source 上）
+        // 切换深色/浅色后，已经画好的 Mermaid 图要按新主题重画，不然深色背景上留着一张浅色主题的图。
+        // renderMarkdown 画图时把源码记在了 data-source 上。只找阅读区和编辑预览里的（不用 document 全局找）。
         function rerenderMermaid() {
-            const graphs = Array.from(document.querySelectorAll('.mermaid[data-source]'));
+            const graphs = [readerContent, editorPreview].flatMap(c => Array.from(c.querySelectorAll('.mermaid[data-source]')));
             if (!graphs.length) return;
             graphs.forEach(g => { g.removeAttribute('data-processed'); g.textContent = g.dataset.source; });
-            mermaid.initialize({ startOnLoad: false, theme: document.body.getAttribute('data-theme') === 'dark' ? 'dark' : 'default' });
-            mermaid.run({ nodes: graphs }).catch(err => console.error('Mermaid 重画失败:', err));
+            runMermaid(graphs).catch(err => console.error('Mermaid 重画失败:', err));
         }
-        const savedTheme = localStorage.getItem('md-theme'); setTheme(savedTheme === 'dark' || (!savedTheme && window.matchMedia('(prefers-color-scheme: dark)').matches));
-        
-        renderDrawer(); switchState('home');
+        const themeChoice = lsGet('mdr-theme-choice');
+        setTheme(themeChoice ? themeChoice === 'dark' : darkMQ.matches);
+
+        // 打开页面先读一次库：数据损坏要在一打开时就提示、先把原文另存起来（侧边栏关着时不画，不会替我们读）
+        getDB();
+        switchState('home');
     </script>
 </body>
 </html>
