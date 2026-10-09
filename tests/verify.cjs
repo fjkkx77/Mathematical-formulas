@@ -460,6 +460,32 @@ async function caseRun(name, fn) {
         check('长文件夹名不把按钮挤出侧边栏', r.actsRight <= r.drawerRight + 0.5 && r.fEll === 'ellipsis', r);
     });
 
+    await caseRun('侧边栏手势：上下滑列表不会误关、左边缘上下滑不会误开；真横滑照常开关', async () => {
+        // 2026-10-10 用户反馈：在抽屉靠右的半边上下滑看文件，会把抽屉关掉。原因是旧版只看横向位移，
+        // 右手拇指上下滑是弧线、会往左偏 50px 以上。下面每一下都是真实触摸事件（CDP），走 11 个点。
+        await reset(m, dbJs(Array.from({ length: 30 }, (_, i) => ({ id: 'g' + i, title: '文件' + i, content: '# ' + i }))));
+        const swipe = async (x0, y0, x1, y1) => {
+            await m.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [{ x: x0, y: y0 }] });
+            for (let i = 1; i <= 10; i++) { await m.send('Input.dispatchTouchEvent', { type: 'touchMove', touchPoints: [{ x: x0 + (x1 - x0) * i / 10, y: y0 + (y1 - y0) * i / 10 }] }); await sleep(16); }
+            await m.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
+            await sleep(450);
+        };
+        await m.ev("document.getElementById('btn-hamburger').click()"); await sleep(400);
+        const r = await m.ev("document.getElementById('drawer').getBoundingClientRect().right");
+        await swipe(r - 30, 700, r - 110, 300);   // 拇指往上推，弧线左偏 80px
+        check('抽屉右半边往上滑（左偏 80px）：不关', await m.ev('drawerOpen'));
+        await swipe(r - 40, 300, r - 120, 650);   // 往下拉，同样左偏
+        check('抽屉右半边往下滑（左偏 80px）：不关', await m.ev('drawerOpen'));
+        await swipe(r - 30, 500, r - 110, 430);   // 斜着走、横竖差不多：拿不准就当滚动
+        check('斜着滑（横 80 竖 70）：不关', await m.ev('drawerOpen'));
+        await swipe(r - 30, 500, r - 160, 515);
+        check('真往左横滑 130px：关上', !(await m.ev('drawerOpen')));
+        await swipe(12, 300, 72, 700);            // 贴着左边缘往下滚正文，带一点右偏
+        check('左边缘上下滑（右偏 60px）：不开', !(await m.ev('drawerOpen')));
+        await swipe(12, 400, 160, 410);
+        check('左边缘往右横滑：打开', await m.ev('drawerOpen'));
+    });
+
     await caseRun('P3-11 侧边栏关上后马上再打开：遮罩还在、点空白能关', async () => {
         await reset(m, '');
         await m.ev("document.getElementById('btn-hamburger').click()"); await sleep(400);

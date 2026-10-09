@@ -7,7 +7,7 @@
 - 线上：https://fjkkx77.github.io/Mathematical-formulas/ ，GitHub Pages 发 **`master` 分支**（不是 main），push 就是上线。
 - 整个应用就是一个 `index.html`（工作区 CRLF，仓库里存 LF，脚本改它时注意）。第三方库全从 CDN 加载、全部钉死版本。
 - 它是 markdown-reader 的姊妹站：结构同源，但**公式走 MathJax（按需加载）**，有自己的 `$` 扩展、金额防护、四种定界符；没有代码行号。
-- 测试：`MDR_PROXY=http://127.0.0.1:8800 node tests/verify.cjs`（真实 headless Chrome，手机 390 + 电脑 1280，131 条）。
+- 测试：`MDR_PROXY=http://127.0.0.1:8800 node tests/verify.cjs`（真实 headless Chrome，手机 390 + 电脑 1280，137 条）。
   测旧版本（A/B）时加 `MDR_LEGACY=1`（旧版没有新变量，严格的就绪判断等不到）。
   `node tests/verify.cjs <目录>` 测别的目录里的 index.html（拿旧版做 A/B）；`ONLY=正则` 只跑名字匹配的用例。
   测试是从 markdown-reader 那边移植的，去掉了 KaTeX / 代码行号，加了本站特有的公式用例。
@@ -26,6 +26,8 @@
    示例文档 id 是 `sample-math`（markdown-reader 的是 `sample`，原来两站点「示例」会互相覆盖）。
 5. **每次打开都是首页**，「接着上次读」只做成按钮（首页「继续阅读」+ 底部「回到上次读到的位置」），不许改成自动跳（用户 2026-10-09 定）。
 6. **不做双指缩放**（用户 2026-10-09 定），viewport 的 `user-scalable=no` 保留。
+7. **侧边栏开关手势要先锁方向**（2026-10-10 修，跟 markdown-reader 同一段代码、两站一起改）：横向 > 纵向×1.5 才算横滑，
+   否则当滚动。旧版只看横向位移，在抽屉右半边上下滑文件列表会被误关。细节见 markdown-reader PROJECT_STATUS 第二节第 9 条。
 
 ## 三、2026-10-09 同步了什么
 跟 markdown-reader 那批整改一一对应（那边 PROJECT_STATUS 第三节有完整列表），在本站的落点：

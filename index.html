@@ -1620,20 +1620,35 @@
         headerUI.btnHamburger.onclick = openDrawer; overlay.onclick = closeDrawer;
 
         // ================= 移动端边缘滑动呼出/关闭菜单 =================
-        let touchStartX = 0;
+        // 只认「横向为主」的滑动（2026-10-10 修）：旧版只看横向位移，在抽屉右半边用拇指上下滑列表时，
+        // 拇指划的是弧线、自然往左偏 50px 以上，就被当成「左滑关闭」。现在照 iOS 的方向锁：
+        // 手指先走满 10px 时看哪个方向占优，锁定后整次手势不变；判成纵向（含斜着走拿不准的）就当滚动、不再理会。
+        let touchStartX = 0, touchStartY = 0, swipeAxis = null; // null=还没定 'x'=横滑 'y'=滚动/不算
         document.addEventListener('touchstart', (e) => {
-            touchStartX = e.changedTouches[0].screenX;
+            if (e.touches.length !== 1) { swipeAxis = 'y'; return; } // 第二根手指落下：这次手势作废
+            touchStartX = e.touches[0].clientX; touchStartY = e.touches[0].clientY; swipeAxis = null;
         }, { passive: true });
+
+        document.addEventListener('touchmove', (e) => {
+            if (swipeAxis) return;
+            const dx = e.touches[0].clientX - touchStartX, dy = e.touches[0].clientY - touchStartY;
+            if (Math.abs(dx) < 10 && Math.abs(dy) < 10) return;
+            swipeAxis = Math.abs(dx) > Math.abs(dy) * 1.5 ? 'x' : 'y';
+        }, { passive: true });
+
+        document.addEventListener('touchcancel', () => { swipeAxis = 'y'; }, { passive: true });
 
         document.addEventListener('touchend', (e) => {
             if (window.innerWidth >= 768 || dialogOpen || folderDragging || suppressFolderClick) return;
-            let touchEndX = e.changedTouches[0].screenX;
-            // 边缘左滑(起始点小于40px)向右超过50px -> 打开抽屉
-            if (touchStartX < 40 && touchEndX - touchStartX > 50 && !drawerOpen) {
+            if (swipeAxis !== 'x' || e.touches.length) return;
+            const dx = e.changedTouches[0].clientX - touchStartX, dy = e.changedTouches[0].clientY - touchStartY;
+            if (Math.abs(dx) <= Math.abs(dy)) return; // 起步是横的、后来拐成竖的，也不算
+            // 边缘右滑(起始点小于40px)超过50px -> 打开抽屉
+            if (touchStartX < 40 && dx > 50 && !drawerOpen) {
                 openDrawer();
             }
             // 抽屉打开时，向左滑动超过50px -> 关闭抽屉
-            else if (drawerOpen && touchStartX - touchEndX > 50) {
+            else if (drawerOpen && dx < -50) {
                 closeDrawer();
             }
         }, { passive: true });
