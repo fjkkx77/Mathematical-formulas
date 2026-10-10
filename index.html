@@ -192,7 +192,7 @@
 
         /* 手机上编辑和预览改成两个标签切换（原来上下各占半屏，键盘一弹编辑区只剩一小条）。
            电脑上照旧左右并排，这一排标签不显示。 */
-        .edit-tabs { display: none; }
+        .edit-tabs, .edit-bar { display: none; }
         @media (max-width: 767px) {
             .edit-tabs { display: flex; flex-shrink: 0; gap: 0; padding: 6px 16px; background: var(--bg-surface); border-bottom: 1px solid var(--border-color); }
             .edit-tabs .seg { flex: 1; display: flex; background: rgba(118, 118, 128, 0.12); border-radius: 9px; padding: 2px; }
@@ -204,7 +204,20 @@
             /* 「分屏」= 上下各半屏同时看（2026-10-10 用户要求加回来，跟整屏的两种并存）：两块都显示，中间留分隔线 */
             .view-edit:not(.tab-split) .edit-pane { border-bottom: none; }
             .view-edit.tab-split .edit-pane, .view-edit.tab-split .preview-pane { padding-top: 12px; padding-bottom: 12px; }
-            .view-edit.tab-split .preview-pane { padding-bottom: calc(12px + env(safe-area-inset-bottom)); }
+            /* 底部一排：放弃 / 重置 / 保存（2026-10-10 用户选的方案：原来收在右上角 ⋯ 里，容易忽略、找不到）。
+               三个一样宽、一样高、同一种圆角——看得见的那块 36px 高、圆角 9px，跟上面「编辑/分屏/预览」那条同一个尺寸；
+               按钮本身 44px 高是手指的点击范围。屏幕底部的安全区由这一排让出来，上面两块就不用再让了。 */
+            .view-edit .edit-pane, .view-edit .preview-pane { padding-bottom: 20px; }
+            .view-edit.tab-split .edit-pane, .view-edit.tab-split .preview-pane { padding-bottom: 12px; }
+            .edit-bar { display: flex; flex-shrink: 0; gap: 10px; padding: 2px 16px calc(2px + env(safe-area-inset-bottom)); background: var(--bg-surface); border-top: 1px solid var(--border-color); }
+            .edit-bar button { flex: 1 1 0; min-width: 0; min-height: 44px; padding: 0; border: none; background: none; cursor: pointer; display: flex; align-items: center; justify-content: center; touch-action: manipulation; -webkit-tap-highlight-color: transparent; }
+            .edit-bar .face { width: 100%; height: 36px; border-radius: 9px; display: flex; align-items: center; justify-content: center; gap: 6px; font-size: 15px; font-weight: 500; background: rgba(118, 118, 128, 0.12); color: var(--apple-blue); transition: opacity 0.15s, transform 0.15s; }
+            .edit-bar .face i { font-size: 13px; }
+            .edit-bar button:active .face { opacity: 0.6; transform: scale(0.97); }
+            .edit-bar .danger .face { color: var(--apple-red); }
+            /* 深色下 12% 的灰底几乎看不出按钮的形状，加深一档（数值是我看截图定的） */
+            [data-theme="dark"] .edit-bar button:not(.save) .face { background: rgba(118, 118, 128, 0.26); }
+            .edit-bar .save .face { background: var(--apple-blue); color: #fff; font-weight: 600; }
         }
 
         @media (min-width: 768px) { .view-edit { flex-direction: row; } .edit-pane { border-bottom: none; border-right: 1px solid var(--border-color); } .mobile-only { display: none !important; } }
@@ -355,7 +368,6 @@
         </div>
         <div class="header-section header-right">
             <button class="icon-btn hidden" id="btn-read-more" title="更多操作"><i class="fas fa-ellipsis-h"></i></button>
-            <button class="icon-btn hidden" id="btn-edit-more" title="编辑选项"><i class="fas fa-ellipsis-h"></i></button>
             <button class="icon-btn hidden" id="btn-toc-toggle" title="收起目录" aria-label="收起/展开目录"><i class="fas fa-list-ul"></i></button>
             <button class="icon-btn hidden" id="btn-read-copy" title="复制全文"><i class="fas fa-copy"></i></button>
             <button class="icon-btn hidden" id="btn-read-download" title="下载为 .md 文件"><i class="fas fa-download"></i></button>
@@ -407,6 +419,11 @@
                 </div>
                 <div class="preview-pane">
                     <div class="markdown-body" id="editor-preview"></div>
+                </div>
+                <div class="edit-bar">
+                    <button type="button" class="danger" id="bar-edit-cancel"><span class="face"><i class="fas fa-times"></i>放弃</span></button>
+                    <button type="button" id="bar-edit-reset"><span class="face"><i class="fas fa-undo"></i>重置</span></button>
+                    <button type="button" class="save" id="bar-edit-save"><span class="face"><i class="fas fa-check"></i>保存</span></button>
                 </div>
             </div>
         </div>
@@ -904,7 +921,6 @@
             btnReadDownload: document.getElementById('btn-read-download'), btnTocToggle: document.getElementById('btn-toc-toggle'),
             btnReadMore: document.getElementById('btn-read-more'), btnEditSave: document.getElementById('btn-edit-save'),
             btnEditCancel: document.getElementById('btn-edit-cancel'), btnEditReset: document.getElementById('btn-edit-reset'),
-            btnEditMore: document.getElementById('btn-edit-more'),
             btnFontDec: document.getElementById('btn-font-dec'), btnFontInc: document.getElementById('btn-font-inc'),
             btnFontReset: document.getElementById('btn-font-reset'),
             headerLogo: document.getElementById('header-logo'),
@@ -1111,7 +1127,6 @@
                 headerUI.headerTitle.classList.remove('hidden'); headerUI.headerTitle.textContent = "编辑: " + currentFile.title;
                 if(isMobile) {
                     headerUI.btnBack.classList.remove('hidden');
-                    headerUI.btnEditMore.classList.remove('hidden');
                 } else {
                     headerUI.btnEditCancel.classList.remove('hidden');
                     headerUI.btnEditReset.classList.remove('hidden');
@@ -1604,15 +1619,10 @@
             ]);
         };
 
-        headerUI.btnEditMore.onclick = () => {
-            const isDark = document.body.getAttribute('data-theme') === 'dark';
-            showActionMenu([
-                { text: '保存修改', icon: 'fas fa-save', action: () => saveEdit(), success: true },
-                { text: '重置内容', icon: 'fas fa-undo', action: () => resetEdit() },
-                { text: isDark ? '浅色模式' : '深色模式', icon: isDark ? 'fas fa-sun' : 'fas fa-moon', action: () => toggleTheme() },
-                { text: '放弃修改', icon: 'fas fa-times', action: () => cancelEdit(), danger: true }
-            ]);
-        };
+        // 手机编辑页底部那一排（电脑上不显示，电脑用顶栏的 取消 / 重置 / 保存）
+        document.getElementById('bar-edit-cancel').onclick = () => cancelEdit();
+        document.getElementById('bar-edit-reset').onclick = () => resetEdit();
+        document.getElementById('bar-edit-save').onclick = () => saveEdit();
 
         let drawerOpen = false;
         const openDrawer = () => { drawerOpen = true; renderDrawer(); showLayer(overlay); drawer.style.transform = 'translateX(0)'; };

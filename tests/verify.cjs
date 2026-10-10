@@ -554,6 +554,37 @@ async function caseRun(name, fn) {
         check('点到第 60 段：预览跟过去', pv > 500, pv);
     });
 
+    await caseRun('手机编辑页底部一排：放弃 / 重置 / 保存，三个一样大，不再收在 ⋯ 里', async () => {
+        // 2026-10-10 用户：常用按钮别放右上角三个点的二级菜单里，容易忽略、找不到。选了「底部一排」，去掉深色按钮
+        await reset(m, dbJs([{ id: 'a', title: '甲', content: '# 甲\n\n原文' }]));
+        await openFromDrawer(m, '甲'); await sleep(500);
+        await m.ev("switchState('edit')"); await sleep(500);
+        const geo = "(() => { const bar = document.querySelector('.edit-bar'); if (!bar) return { bs: [], more: true }; const bs = [...bar.querySelectorAll('button')].map(b => { const r = b.getBoundingClientRect(), f = b.querySelector('.face').getBoundingClientRect(); return { t: b.textContent.trim(), w: Math.round(r.width), h: Math.round(r.height), fh: Math.round(f.height), fw: Math.round(f.width), bottom: r.bottom, left: r.left, right: r.right }; }); const vis = id => { const el = document.getElementById(id); return !!el && el.getBoundingClientRect().width > 0; }; return { bs, vh: innerHeight, vw: document.documentElement.clientWidth, more: vis('btn-edit-more'), theme: vis('btn-theme'), over: document.documentElement.scrollWidth - document.documentElement.clientWidth, paneBottom: document.querySelector('.edit-pane').getBoundingClientRect().bottom, barTop: bar.getBoundingClientRect().top }; })()";
+        for (const tab of ['edit', 'split', 'preview']) {
+            await m.ev("setEditTab('" + tab + "')"); await sleep(300);
+            const r = await m.ev(geo);
+            const same = r.bs.length === 3 && r.bs.every(b => b.w === r.bs[0].w && b.h === r.bs[0].h && b.fh === r.bs[0].fh && b.fw === r.bs[0].fw);
+            check('「' + tab + '」下：底部三个按钮（放弃 / 重置 / 保存）一样大、点击高度 ≥44、都在屏幕内', r.bs.map(b => b.t).join() === '放弃,重置,保存' && same && r.bs[0].h >= 44 && r.bs.every(b => b.bottom <= r.vh && b.left >= 0 && b.right <= r.vw) && r.over <= 0, r.bs);
+            if (tab === 'edit') check('右上角没有 ⋯，这个界面也没有深色按钮；按钮排在编辑区下面不盖字', !r.more && !r.theme && r.barTop >= r.paneBottom - 1, { more: r.more, theme: r.theme, barTop: r.barTop, paneBottom: r.paneBottom });
+        }
+        await m.ev("setEditTab('edit')");
+        await m.ev("editorTextarea.value = '# 甲\\n\\n改过了'; editorTextarea.dispatchEvent(new Event('input'))"); await sleep(200);
+        m.ev("document.getElementById('bar-edit-reset').click()");
+        check('点「重置」：先问一句', !!(await dlgShown(m)));
+        await dlgClick(m, '恢复'); await sleep(300);
+        check('确认后编辑框回到原文', (await m.ev('editorTextarea.value')) === '# 甲\n\n原文');
+        await m.ev("editorTextarea.value = '# 甲\\n\\n存这个'; editorTextarea.dispatchEvent(new Event('input'))"); await sleep(200);
+        await m.ev("document.getElementById('bar-edit-save').click()"); await sleep(800);
+        check('点「保存」：存进库并回到阅读', (await state(m)) === 'read' && (await getDB(m)).files[0].content === '# 甲\n\n存这个');
+        await m.ev("switchState('edit')"); await sleep(400);
+        await m.ev("editorTextarea.value = '# 甲\\n\\n不要这个'; editorTextarea.dispatchEvent(new Event('input'))"); await sleep(200);
+        m.ev("document.getElementById('bar-edit-cancel').click()");
+        const d = await dlgShown(m);
+        check('点「放弃」且有改动：先问', !!d, d);
+        if (d) { await m.ev("[...document.querySelectorAll('.dlg-overlay.show .dlg-btn')].find(b => /放弃|不保存|丢弃/.test(b.textContent)).click()"); await sleep(700); }
+        check('确认后回到阅读，库里还是上次保存的', (await state(m)) === 'read' && (await getDB(m)).files[0].content === '# 甲\n\n存这个', d && d.btns);
+    });
+
     await caseRun('P3-11 侧边栏关上后马上再打开：遮罩还在、点空白能关', async () => {
         await reset(m, '');
         await m.ev("document.getElementById('btn-hamburger').click()"); await sleep(400);
