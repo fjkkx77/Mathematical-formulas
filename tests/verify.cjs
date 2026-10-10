@@ -486,6 +486,74 @@ async function caseRun(name, fn) {
         check('左边缘往右横滑：打开', await m.ev('drawerOpen'));
     });
 
+    await caseRun('左边缘右滑的起点范围：正文左侧随手一划不开抽屉；宽表格里横滑不开', async () => {
+        // 2026-10-10 用户反馈：触发范围太宽，左右滑动时经常把「我的文件」滑出来。旧版起点 < 40px 都算。
+        const wide = '# 宽表\n\n| ' + Array.from({ length: 14 }, (_, i) => '第' + i + '列很长很长').join(' | ') + ' |\n|' + '---|'.repeat(14) + '\n| ' + Array.from({ length: 14 }, (_, i) => '内容' + i).join(' | ') + ' |\n\n' + Array.from({ length: 30 }, (_, i) => '段落' + i).join('\n\n');
+        await reset(m, dbJs([{ id: 'a', title: '宽表', content: wide }]));
+        await openFromDrawer(m, '宽表'); await sleep(700);
+        const swipe = async (x0, y0, x1, y1) => {
+            await m.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [{ x: x0, y: y0 }] });
+            for (let i = 1; i <= 10; i++) { await m.send('Input.dispatchTouchEvent', { type: 'touchMove', touchPoints: [{ x: x0 + (x1 - x0) * i / 10, y: y0 + (y1 - y0) * i / 10 }] }); await sleep(16); }
+            await m.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
+            await sleep(450);
+        };
+        await swipe(30, 600, 180, 608);
+        check('从 x=30 往右横滑 150px：不开（旧版会开）', !(await m.ev('drawerOpen')));
+        await swipe(38, 600, 200, 590);
+        check('从 x=38 往右横滑：不开', !(await m.ev('drawerOpen')));
+        // 把表格滚到中间，再从它里面贴左的位置往右滑（= 想把表格滚回去）
+        const t = await m.ev("(() => { const tb = document.querySelector('#reader-content table'); tb.scrollLeft = 200; const r = tb.getBoundingClientRect(); return { left: r.left, y: r.top + r.height / 2, scrollable: tb.scrollWidth > tb.clientWidth }; })()");
+        if (t.left < 23) {
+            await swipe(Math.max(t.left + 1, 6), t.y, 170, t.y + 4);
+            check('起点在能横向滚动的表格里：不开', t.scrollable && !(await m.ev('drawerOpen')), t);
+        } else {
+            // 这个页面的正文左边距比触发区宽，表格够不到触发区；直接验那个判断函数
+            check('能横向滚动的表格被认出来（正文边距 ' + Math.round(t.left) + 'px，表格本身够不到触发区）', t.scrollable && (await m.ev("inHScroller(document.querySelector('#reader-content table td')) && !inHScroller(document.querySelector('#reader-content p'))")), t);
+        }
+        await swipe(10, 600, 170, 606);
+        check('真从屏幕边上（x=10）往右滑：照常打开', await m.ev('drawerOpen'));
+    });
+
+    await caseRun('手机编辑三种看法：编辑 / 分屏 / 预览，分屏上下各半屏且记得住', async () => {
+        // 2026-10-10 用户要求：整屏编辑 / 整屏预览之外，把原来上下半屏同时看的方式加回来，三种自己切
+        await reset(m, dbJs([{ id: 'a', title: '甲', content: '# 甲\n\n正文' }]));
+        await openFromDrawer(m, '甲'); await sleep(500);
+        await m.ev("switchState('edit')"); await sleep(500);
+        const geo = "(() => { const e = document.querySelector('.edit-pane'), p = document.querySelector('.preview-pane'); const er = e.getBoundingClientRect(), pr = p.getBoundingClientRect(); return { ed: getComputedStyle(e).display, pd: getComputedStyle(p).display, eh: er.height, ph: pr.height, eb: er.bottom, pt: pr.top, vh: innerHeight, on: [...document.querySelectorAll('.edit-tabs button.on')].map(b => b.textContent), n: document.querySelectorAll('.edit-tabs button').length, over: document.documentElement.scrollWidth - document.documentElement.clientWidth }; })()";
+        let r = await m.ev(geo);
+        check('三个标签，默认是「编辑」整屏', r.n === 3 && r.on.join() === '编辑' && r.pd === 'none' && r.eh > r.vh * 0.75, r);
+        await m.ev("document.getElementById('tab-split').click()"); await sleep(600);
+        r = await m.ev(geo);
+        check('点「分屏」：编辑在上、预览在下，各占三成以上屏高，不横向溢出', r.on.join() === '分屏' && r.ed !== 'none' && r.pd !== 'none' && r.eh > r.vh * 0.3 && r.ph > r.vh * 0.3 && r.pt >= r.eb - 1 && r.over <= 0, r);
+        check('分屏时预览已经渲染出内容', (await m.ev("document.getElementById('editor-preview').innerText")).includes('正文'));
+        await m.ev("editorTextarea.value += '\\n\\n新段落XYZ'; editorTextarea.dispatchEvent(new Event('input'))"); await sleep(700);
+        check('分屏时打字：下半屏跟着更新', (await m.ev("document.getElementById('editor-preview').innerText")).includes('新段落XYZ'));
+        await m.ev('saveEdit()'); await sleep(700);
+        await m.ev("switchState('edit')"); await sleep(600);
+        r = await m.ev(geo);
+        check('保存后再进编辑：还是分屏', r.on.join() === '分屏' && r.pd !== 'none' && r.ed !== 'none', r);
+        await m.ev("document.getElementById('tab-preview').click()"); await sleep(400);
+        r = await m.ev(geo);
+        check('点「预览」：整屏预览', r.on.join() === '预览' && r.ed === 'none' && r.ph > r.vh * 0.75, r);
+        await m.ev("document.getElementById('tab-edit').click()"); await sleep(300);
+        await m.ev("switchState('read')"); await sleep(500); await m.ev("switchState('edit')"); await sleep(500);
+        r = await m.ev(geo);
+        check('改回「编辑」后再进：是整屏编辑', r.on.join() === '编辑' && r.pd === 'none', r);
+    });
+
+    await caseRun('进编辑页（分屏）：预览跟编辑框一样从开头显示，点了编辑框才跟光标', async () => {
+        // 2026-10-10 发现：填内容后光标默认在最末尾，预览跟着光标滚到文末，编辑框却在开头，上下对不上
+        const long = '# 标题\n\n' + Array.from({ length: 80 }, (_, i) => '第 ' + (i + 1) + ' 段正文。').join('\n\n');
+        await reset(m, dbJs([{ id: 'a', title: '长文', content: long }]) + "; localStorage.setItem('mdr-edit-tab', 'split')");
+        await openFromDrawer(m, '长文'); await sleep(600);
+        await m.ev("switchState('edit')"); await sleep(1200);
+        const r = await m.ev("({ split: document.getElementById('view-edit').classList.contains('tab-split'), ed: editorTextarea.scrollTop, pv: document.querySelector('.preview-pane').scrollTop, txt: document.getElementById('editor-preview').innerText.length })");
+        check('一进来就是分屏，预览已渲染且停在开头', r.split && r.txt > 100 && r.ed === 0 && r.pv === 0, r);
+        await m.ev("{ const v = editorTextarea.value, i = v.indexOf('第 60 段'); editorTextarea.focus(); editorTextarea.setSelectionRange(i, i); editorTextarea.dispatchEvent(new MouseEvent('click', { bubbles: true })); }"); await sleep(500);
+        const pv = await m.ev("document.querySelector('.preview-pane').scrollTop");
+        check('点到第 60 段：预览跟过去', pv > 500, pv);
+    });
+
     await caseRun('P3-11 侧边栏关上后马上再打开：遮罩还在、点空白能关', async () => {
         await reset(m, '');
         await m.ev("document.getElementById('btn-hamburger').click()"); await sleep(400);

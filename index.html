@@ -201,7 +201,10 @@
             [data-theme="dark"] .edit-tabs button.on { background: #636366; }
             .view-edit.tab-edit .preview-pane { display: none; }
             .view-edit.tab-preview .edit-pane { display: none; }
-            .view-edit .edit-pane { border-bottom: none; }
+            /* 「分屏」= 上下各半屏同时看（2026-10-10 用户要求加回来，跟整屏的两种并存）：两块都显示，中间留分隔线 */
+            .view-edit:not(.tab-split) .edit-pane { border-bottom: none; }
+            .view-edit.tab-split .edit-pane, .view-edit.tab-split .preview-pane { padding-top: 12px; padding-bottom: 12px; }
+            .view-edit.tab-split .preview-pane { padding-bottom: calc(12px + env(safe-area-inset-bottom)); }
         }
 
         @media (min-width: 768px) { .view-edit { flex-direction: row; } .edit-pane { border-bottom: none; border-right: 1px solid var(--border-color); } .mobile-only { display: none !important; } }
@@ -396,6 +399,7 @@
             <div class="view-layer view-edit hidden tab-edit" id="view-edit">
                 <div class="edit-tabs"><div class="seg" role="tablist">
                     <button type="button" class="on" id="tab-edit" role="tab">编辑</button>
+                    <button type="button" id="tab-split" role="tab">分屏</button>
                     <button type="button" id="tab-preview" role="tab">预览</button>
                 </div></div>
                 <div class="edit-pane">
@@ -928,6 +932,7 @@
         const toastEl = document.getElementById('toast');
         const tabEditBtn = document.getElementById('tab-edit');
         const tabPreviewBtn = document.getElementById('tab-preview');
+        const tabSplitBtn = document.getElementById('tab-split');
         const mdStyleLink = document.getElementById('md-style');
         const hljsStyleLink = document.getElementById('hljs-style');
         const fileRestoreInput = document.getElementById('file-restore');
@@ -1154,8 +1159,8 @@
                 editingId = currentFile.id;
                 originalContent = currentFile.content;
                 editorTextarea.value = currentFile.content;
-                editorTextarea.scrollTop = 0; previewPane.scrollTop = 0;
-                setEditTab('edit', false);
+                editorTextarea.scrollTop = 0; previewPane.scrollTop = 0; cursorPlaced = false;
+                setEditTab(lsGet(EDIT_TAB_KEY) === 'split' ? 'split' : 'edit', false);
                 await restoreDraftIfAny();
                 previewDirty = true;
                 if (previewVisible()) await flushPreview();
@@ -1623,10 +1628,22 @@
         // 只认「横向为主」的滑动（2026-10-10 修）：旧版只看横向位移，在抽屉右半边用拇指上下滑列表时，
         // 拇指划的是弧线、自然往左偏 50px 以上，就被当成「左滑关闭」。现在照 iOS 的方向锁：
         // 手指先走满 10px 时看哪个方向占优，锁定后整次手势不变；判成纵向（含斜着走拿不准的）就当滚动、不再理会。
+        // 「左边缘右滑打开」的起点范围（2026-10-10 用户反馈太宽、左右滑动时经常误开）：原来 40px，手指在正文左侧
+        // 随手一划就算数。收到 24px——只有真从屏幕边上划进来才算；这个数是我定的、没有官方出处，真机上嫌难触发再调。
+        // 另外起点落在「自己能横向滚动」的东西里（宽表格、代码块、长公式）时，那是在滚内容，不开抽屉。
+        const DRAWER_EDGE_PX = 24;
+        const inHScroller = (el) => {
+            for (; el && el.nodeType === 1 && el !== document.body; el = el.parentElement) {
+                if (el.scrollWidth > el.clientWidth + 1 && /auto|scroll/.test(getComputedStyle(el).overflowX)) return true;
+            }
+            return false;
+        };
+        let touchInHScroller = false;
         let touchStartX = 0, touchStartY = 0, swipeAxis = null; // null=还没定 'x'=横滑 'y'=滚动/不算
         document.addEventListener('touchstart', (e) => {
             if (e.touches.length !== 1) { swipeAxis = 'y'; return; } // 第二根手指落下：这次手势作废
             touchStartX = e.touches[0].clientX; touchStartY = e.touches[0].clientY; swipeAxis = null;
+            touchInHScroller = !drawerOpen && inHScroller(e.target);
         }, { passive: true });
 
         document.addEventListener('touchmove', (e) => {
@@ -1643,8 +1660,8 @@
             if (swipeAxis !== 'x' || e.touches.length) return;
             const dx = e.changedTouches[0].clientX - touchStartX, dy = e.changedTouches[0].clientY - touchStartY;
             if (Math.abs(dx) <= Math.abs(dy)) return; // 起步是横的、后来拐成竖的，也不算
-            // 边缘右滑(起始点小于40px)超过50px -> 打开抽屉
-            if (touchStartX < 40 && dx > 50 && !drawerOpen) {
+            // 边缘右滑(起始点在 DRAWER_EDGE_PX 以内)超过50px -> 打开抽屉
+            if (touchStartX < DRAWER_EDGE_PX && dx > 50 && !drawerOpen && !touchInHScroller) {
                 openDrawer();
             }
             // 抽屉打开时，向左滑动超过50px -> 关闭抽屉
@@ -2482,8 +2499,11 @@
             setTimeout(() => els.forEach(el => el.classList.remove('sync-highlight')), 900);
         }
 
+        // 刚进编辑页、还没点过编辑框也没打过字时不跟光标：浏览器给编辑框填内容后光标默认在最末尾，
+        // 跟着它滚的话就成了「编辑框在开头、预览在文末」（电脑并排和手机分屏一进来就对不上，2026-10-10 发现）。
+        let cursorPlaced = false;
         function scrollPreviewToCursor() {
-            if (!previewVisible()) return;
+            if (!previewVisible() || !cursorPlaced) return;
             const value = editorTextarea.value;
             // 预览渲染的是去掉 YAML front matter 之后的正文（stripFrontMatter），行号是按正文算的；
             // 光标行号却是按整个编辑框算的。原来没扣掉这一段，带 front matter 的文档光标同步
@@ -2517,7 +2537,9 @@
         // 现在：上一次渲染很快（< 30ms，小文档）就照旧立刻渲染；慢的话等打字停顿 150ms 再渲染一次。
         // Mermaid 图也跟着只在停下来时重画。手机上在「编辑」标签时预览看不见，干脆不渲染，切到「预览」时再渲染。
         let editTab = 'edit', previewDirty = false, previewTimer = null;
-        function previewVisible() { return currentState === 'edit' && (!isMobileWidth() || editTab === 'preview'); }
+        // 手机上三种看法：「编辑」整屏写、「分屏」上半屏写下半屏看、「预览」整屏看。上次用的是分屏就记住，下次进编辑还是分屏。
+        const EDIT_TAB_KEY = 'mdr-edit-tab';
+        function previewVisible() { return currentState === 'edit' && (!isMobileWidth() || editTab !== 'edit'); }
         function schedulePreview(immediate) {
             previewDirty = true;
             clearTimeout(previewTimer);
@@ -2536,19 +2558,23 @@
             editTab = tab;
             vEdit.classList.toggle('tab-edit', tab === 'edit');
             vEdit.classList.toggle('tab-preview', tab === 'preview');
+            vEdit.classList.toggle('tab-split', tab === 'split');
+            tabSplitBtn.classList.toggle('on', tab === 'split'); tabSplitBtn.setAttribute('aria-selected', tab === 'split');
             tabEditBtn.classList.toggle('on', tab === 'edit'); tabEditBtn.setAttribute('aria-selected', tab === 'edit');
             tabPreviewBtn.classList.toggle('on', tab === 'preview'); tabPreviewBtn.setAttribute('aria-selected', tab === 'preview');
             if (!sync) return;
             // 切到预览：有没渲染的改动先渲染，然后定位到光标所在的那一块
-            if (tab === 'preview') { if (previewDirty) flushPreview(); else scrollPreviewToCursor(); }
+            if (tab !== 'edit') { if (previewDirty) flushPreview(); else scrollPreviewToCursor(); }
         }
-        tabEditBtn.onclick = () => setEditTab('edit');
-        tabPreviewBtn.onclick = () => setEditTab('preview');
+        const pickEditTab = (tab) => { lsSet(EDIT_TAB_KEY, tab); setEditTab(tab); };
+        tabEditBtn.onclick = () => pickEditTab('edit');
+        tabSplitBtn.onclick = () => pickEditTab('split');
+        tabPreviewBtn.onclick = () => pickEditTab('preview');
 
         const CURSOR_MOVE_KEYS = new Set(['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Home', 'End', 'PageUp', 'PageDown']);
-        editorTextarea.addEventListener('click', scrollPreviewToCursor);
-        editorTextarea.addEventListener('keyup', e => { if (CURSOR_MOVE_KEYS.has(e.key)) scrollPreviewToCursor(); });
-        editorTextarea.addEventListener('input', () => { scheduleDraftSave(); schedulePreview(false); });
+        editorTextarea.addEventListener('click', () => { cursorPlaced = true; scrollPreviewToCursor(); });
+        editorTextarea.addEventListener('keyup', e => { if (CURSOR_MOVE_KEYS.has(e.key)) { cursorPlaced = true; scrollPreviewToCursor(); } });
+        editorTextarea.addEventListener('input', () => { cursorPlaced = true; scheduleDraftSave(); schedulePreview(false); });
 
         // ================= 快捷键 =================
         // 编辑框里 Tab 缩进 / Shift+Tab 取消缩进（写嵌套列表要用；4 个空格，无序、有序列表都能嵌套）。
