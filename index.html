@@ -564,21 +564,39 @@
         // 【刻意收窄】只认"$$ 后面紧跟空行"这一种——那正是 inline 层处理不了的特征。
         // 其余所有写法（$$E=mc^2$$、$$\n公式\n$$、段落中间的 $$）一律不碰，继续走原路径，
         // 免得干扰 marked 的段落切分：block 扩展的 start() 会成为段落的截断点。
+        // 2026-10-18 修：多行公式「$$\n公式\n$$」的结尾 $$ 后面也常跟空行，原来 start() 会把这个结尾当成新公式的开头，
+        // 一直配到下一个公式的开头 $$，把中间的正文当公式吞掉（tests/verify.cjs「连续几个行间公式」）。
+        // 现在：start() 只返回「从这里真能配出一个公式」的位置，并且跳过「多行公式的结尾 $$」——判断办法是数这一段
+        //（上一个空行之后）里它前面有几个 $$，奇数个说明它是在给前面的公式收尾（多行公式中间不能有空行，所以开头和结尾一定在同一段里）。
+        // 配出来的内容里夹着 $$ 的也不算（那是跨过了别的公式）。
+        const MATH_BLOCK_RULE = /^\$\$[ \t]*\n(?:[ \t]*\n)+([\s\S]+?)\n(?:[ \t]*\n)*[ \t]*\$\$(?:\n|$)/;
+        const matchMathBlock = (src) => {
+            const m = MATH_BLOCK_RULE.exec(src);
+            if (!m || /\$\$/.test(m[1]) || !m[1].trim()) return null;
+            return m;
+        };
         const mathBlockExtension = {
             name: 'mathBlock',
             level: 'block',
             start(src) {
-                const m = /(?:^|\n)[ \t]*\$\$[ \t]*\n[ \t]*\n/.exec(src);
-                if (!m) return -1;
-                return m.index + (m[0][0] === '\n' ? 1 : 0);
+                const re = /(?:^|\n)[ \t]*\$\$[ \t]*\n[ \t]*\n/g;
+                let m;
+                while ((m = re.exec(src))) {
+                    const at = m.index + m[0].indexOf('$$');
+                    re.lastIndex = m.index + 1;
+                    const parts = src.slice(0, at).split(/\n[ \t]*\n/);
+                    let n = (parts[parts.length - 1].match(/\$\$/g) || []).length;
+                    // marked 调 start() 时传的是去掉第一个字符的 src：这一段开头的「$$」只剩一个「$」，补上
+                    if (parts.length === 1 && /^\$(?!\$)/.test(src)) n++;
+                    if (n % 2 === 1) continue; // 前面的公式的结尾
+                    if (matchMathBlock(src.slice(at))) return at;
+                }
+                return -1;
             },
             tokenizer(src) {
-                const rule = /^\$\$[ \t]*\n(?:[ \t]*\n)+([\s\S]+?)\n(?:[ \t]*\n)*[ \t]*\$\$(?:\n|$)/;
-                const match = rule.exec(src);
+                const match = matchMathBlock(src);
                 if (!match) return false;
-                const text = match[1].trim();
-                if (!text) return false;
-                return { type: 'mathBlock', raw: match[0], text };
+                return { type: 'mathBlock', raw: match[0], text: match[1].trim() };
             },
             renderer(token) {
                 const safeText = token.text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');

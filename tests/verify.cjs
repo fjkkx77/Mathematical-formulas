@@ -266,6 +266,25 @@ async function caseRun(name, fn) {
         check('公式都有实际宽度（contain:layout 没把排版弄坏）', sz === 5, sz);
     });
 
+    // 2026-10-18 修：多行 $$ 公式的结尾 $$ 后面跟空行时，mathBlock 扩展把这个结尾当成新公式的开头，
+    // 一直配到下一个公式的开头 $$，中间的正文被当成公式吞掉（显示成红色报错）。2026-10-16 在简阅MD 小程序移植时发现。
+    // 同一篇里放上本站原本支持的几种写法（单行 $$…$$、多行 $$、$$ 后隔空行），确认修完都还在。
+    await caseRun('连续几个行间公式：中间的正文不被吞、各种写法都还渲染', async () => {
+        const doc = ['# 连续公式', '', '行间：', '', '$$', '\\int_0^1 x\\,dx', '$$', '', '正态分布的密度函数：', '',
+            '$$f(x) = \\frac{1}{2}$$', '', '分段函数：', '', '$$',
+            'F(x) = \\begin{cases} 0, & x<0 \\\\ 1, & x \\ge 0 \\end{cases}', '$$', '',
+            '空行写法：', '', '$$', '', 'a^2 + b^2', '', '$$', '', '后文'].join('\n');
+        await reset(m, dbJs([{ id: 'a', title: '连续公式', content: doc }]));
+        await openFromDrawer(m, '连续公式');
+        await waitFor(m, "document.querySelectorAll('#reader-content mjx-container').length >= 1", 20000); await sleep(1500);
+        // 正文被吞进公式后字还在页面上（排成数学符号），所以只数公式外面的文字
+        const r = await m.ev("(() => { const c = document.getElementById('reader-content').cloneNode(true); c.querySelectorAll('mjx-container, .math-display, .math-inline').forEach(x => x.remove()); return { n: document.querySelectorAll('#reader-content mjx-container').length, err: document.querySelectorAll('#reader-content mjx-merror').length, outside: c.textContent }; })()");
+        check('4 个行间公式都渲染（多行 / 单行 / 多行 cases / 隔空行）', r.n === 4, r.n);
+        check('公式之间的正文都在公式外面（没被吞进公式）', ['正态分布的密度函数：', '分段函数：', '空行写法：', '后文'].every(s => r.outside.includes(s)), r.outside.slice(0, 300));
+        check('页面上没有露出的 $$ 和公式源码', !/\$\$|\\begin|\\int/.test(r.outside), r.outside.slice(0, 300));
+        check('没有公式报错', r.err === 0, r.err);
+    });
+
     await caseRun('P2-3 文档里的 <style> / 固定定位不再影响整个应用', async () => {
         await reset(m, dbJs([{ id: 'a', title: '样式', content: '<style>header{background:olive!important}</style>\n\n# 样式\n\n段落\n\n<style>body{display:none}</style>\n\n<div style="position:fixed;inset:0;z-index:99999;background:red">盖住</div>\n\n<form action="https://example.com"><input name="p"></form>' }]));
         await openFromDrawer(m, '样式'); await sleep(800);
