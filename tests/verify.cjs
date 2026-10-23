@@ -285,6 +285,17 @@ async function caseRun(name, fn) {
         check('没有公式报错', r.err === 0, r.err);
     });
 
+    // 2026-10-23 三站对比实测：公式里的 \href 原来渲染成可点的 javascript: 链接（MathJax 在净化之后才生成公式，DOMPurify 管不到）
+    await caseRun('公式里的 \\href{javascript:…} 不生成可点的脚本链接；正常网址照常', async () => {
+        const doc = '# 公式链接\n\n坏的 $\\href{javascript:alert(2)}{点我}$ 和好的 $\\href{https://example.com/}{官网}$';
+        await reset(m, dbJs([{ id: 'a', title: '公式链接', content: doc }]));
+        await openFromDrawer(m, '公式链接');
+        await waitFor(m, "document.querySelectorAll('#reader-content mjx-container').length >= 2", 20000); await sleep(1200);
+        const r = await m.ev("[...document.querySelectorAll('#reader-content a[href]')].map(a => a.getAttribute('href'))");
+        check('没有 javascript: 链接', !r.some(h => /^\s*javascript:/i.test(h)), r);
+        check('https 网址的 \\href 仍是链接', r.includes('https://example.com/'), r);
+    });
+
     await caseRun('P2-3 文档里的 <style> / 固定定位不再影响整个应用', async () => {
         await reset(m, dbJs([{ id: 'a', title: '样式', content: '<style>header{background:olive!important}</style>\n\n# 样式\n\n段落\n\n<style>body{display:none}</style>\n\n<div style="position:fixed;inset:0;z-index:99999;background:red">盖住</div>\n\n<form action="https://example.com"><input name="p"></form>' }]));
         await openFromDrawer(m, '样式'); await sleep(800);

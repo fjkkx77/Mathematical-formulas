@@ -1,7 +1,7 @@
 # 数学公式阅读器（Mathematical-formulas）现状与交接
 
 > 给下一次接手的人（包括换了会话的 Claude）。改这个仓库之前先读这份；改完如果改变了下面写的任何一条，回来更新。
-> 最后更新：2026-10-18（修行间公式吞正文的漏洞，见第二节第 1 条）
+> 最后更新：2026-10-23（MathJax 加 ui/safe，见第二节第 2 条）；更早 2026-10-18（修行间公式吞正文的漏洞，见第二节第 1 条）
 
 ## 一、基本事实
 - 线上：https://fjkkx77.github.io/Mathematical-formulas/ ，GitHub Pages 发 **`master` 分支**（不是 main），push 就是上线。
@@ -22,6 +22,9 @@
    修前修后拿本机 263 篇真实 md + 1029 篇人造组合对照：结果不同的 193 篇全是旧版坏（正文进公式 / 露出 `$$`）、新版好，其余一字不差。
 2. **XSS 防线**：产出 HTML 的永远是完整的 `marked.parse()`，`postprocess` 里的 `DOMPurify.sanitize`（`ADD_ATTR:['style']`、
    `FORBID_TAGS:['style','form']`）只在这条路径上生效；绝不能改成逐块 `marked.parser`。拼进 innerHTML 的文件名一律 `escapeHtml`。
+   **公式是净化之后才由 MathJax 生成的，DOMPurify 管不到**：`window.MathJax` 配置里的 `loader: { load: ['ui/safe'] }` 不能删
+  （2026-10-23 三站对比时补的；原来 `$\href{javascript:…}{点我}$` 渲染成可点的脚本链接）。测试「公式里的 \href{javascript:…}」。
+   公式「哪些算公式」的规则 2026-10-23 起三个站一字一样（markdown-reader、MyKnowledgeBase 照本站对齐），改规则要三站一起改。
 3. **改文档库一律走 `mutateDB(fn)`**（在最新的库上改一处再存），换文档一律走 `openDoc` / `confirmLeaveEdit`，
    页面里不用原生 alert/confirm/prompt（测试会扫源码）。这三条跟 markdown-reader 完全一样，那边 PROJECT_STATUS 第二节有细节。
 4. **跟 markdown-reader 共用存储**：`md-pro-db`（文档库）、`md-theme`、`md-font-scale`、`md-pro-sort` 是同一份；

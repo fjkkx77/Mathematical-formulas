@@ -48,6 +48,11 @@
         // 只放配置，不在这里直接加载 tex-chtml.js 本体——MathJax 体积不小，
         // 真正的脚本改成"文档里检测到 $ 数学语法才按需加载"，纯文字/代码笔记打开更快
         window.MathJax = {
+            // ui/safe（2026-10-23，三站对比实测）：公式是 DOMPurify 净化**之后**才由 MathJax 生成的，净化管不到。
+            // 不加它，$\href{javascript:…}{点我}$ 会渲染成一个点了就执行脚本的链接（对比时实测生成了一个 href 以 javascript: 开头的链接）。
+            // 官方文档「Safe Extension Options」：加载后链接默认只放行 http / https / file，javascript: 和 data: 被过滤。
+            // MyKnowledgeBase 2026-10-22 已加；markdown-reader 用 KaTeX，默认 trust:false 本来就不渲染 \href。
+            loader: { load: ['ui/safe'] },
             tex: {
                 inlineMath: [['\\(', '\\)']],
                 displayMath: [['\\[', '\\]']],
