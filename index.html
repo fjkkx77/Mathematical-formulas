@@ -109,12 +109,14 @@
             justify-content: space-between; z-index: 100;
         }
 
-        /* 左右两侧按钮区按内容实际宽度排布（不参与拉伸抢空间），标题区独占剩余空间、自适应收缩。
-           原来是 1:2:1 按比例分：右侧按钮一多（这次加了目录开关、下载），电脑窄窗口下右侧放不下会被挤压。
+        /* 标题按整个窗口居中：左右两块平分标题以外的宽度，所以一样宽、标题正好在中间。
+           按钮多的一侧放不下时（min-width: max-content）那侧按按钮实际宽度，另一侧吃剩下的，标题只往按钮少的一边让开必要的距离；
+           再放不下就只压缩标题（省略号），按钮不让——右侧按钮多也不会被挤压（最早 1:2:1 按比例分时的问题）。
+           之前一版是左右按内容宽、标题在剩下的空隙里居中：电脑上右边按钮多，标题明显偏左（用户 2026-10-23 截图问的）。
            跟 markdown-reader 的顶栏布局一致。 */
-        .header-section { display: flex; align-items: center; gap: 6px; flex: 0 0 auto; min-width: 0; }
-        .header-center { flex: 1; justify-content: center; text-align: center; min-width: 0; padding: 0 12px; }
-        .header-right { justify-content: flex-end; gap: 2px; flex: 0 0 auto; min-width: 0; }
+        .header-section { display: flex; align-items: center; gap: 6px; flex: 1 1 0; min-width: max-content; }
+        .header-center { flex: 0 1 auto; justify-content: center; text-align: center; min-width: 0; padding: 0 12px; }
+        .header-right { justify-content: flex-end; gap: 2px; }
 
         /* 触摸区域至少 44×44（Apple HIG 建议值），图标本身大小不变，只是能点的范围变大 */
         .icon-btn { background: none; border: none; color: var(--apple-blue); flex-shrink: 0; font-size: 1.3rem; padding: 8px; min-width: 44px; min-height: 44px; border-radius: 8px; cursor: pointer; display: flex; align-items: center; justify-content: center; transition: opacity 0.2s; }

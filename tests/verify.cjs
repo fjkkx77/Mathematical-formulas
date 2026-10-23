@@ -907,6 +907,40 @@ async function caseRun(name, fn) {
         }
     });
 
+    await caseRun('顶栏标题：放得下就按整个窗口居中，放不下也不压按钮', async () => {
+        // 原来标题只在「左右按钮之间剩下的空隙」里居中：电脑上右边按钮多，标题偏左约 200px（用户 2026-10-23 截图）
+        const probe = `(() => {
+            const el = document.getElementById('header-title'), t = el.getBoundingClientRect();
+            const vis = sel => [...document.querySelectorAll(sel)].filter(e => e.getClientRects().length).map(e => e.getBoundingClientRect());
+            // 一侧没有按钮时（手机编辑页右边是空的），以顶栏内边距为界
+            const h = document.getElementById('main-header'), hr = h.getBoundingClientRect(), cs = getComputedStyle(h);
+            const lEnd = Math.max(hr.left + parseFloat(cs.paddingLeft), ...vis('#main-header > .header-section:first-child > *').map(r => r.right));
+            const rStart = Math.min(hr.right - parseFloat(cs.paddingRight), ...vis('#main-header > .header-right > *').map(r => r.left));
+            const mid = innerWidth / 2, half = el.scrollWidth / 2 + 12;   // 12 = 标题区左右内边距
+            return { off: Math.round((t.left + t.right) / 2 - mid), gapL: Math.round(t.left - lEnd), gapR: Math.round(rStart - t.right),
+                     room: mid - half >= lEnd && mid + half <= rStart, cut: el.scrollWidth > el.clientWidth + 1, sw: document.documentElement.scrollWidth };
+        })()`;
+        const long = '这是一个特别特别长的文档标题用来测试顶栏放不下时的表现会不会压到按钮上';
+        for (const w of [320, 390, 430, 768, 1280, 1707]) {
+            const c = await open(w, 800, w < 900 ? 2 : 1);
+            try {
+                for (const title of ['Skills使用手册', long]) {
+                    await reset(c, dbJs([{ id: 'a', title, content: '# 正文' }]));
+                    await openFromDrawer(c, title); await sleep(500);
+                    for (const st of ['read', 'edit']) {
+                        if (st === 'edit') { await c.ev("switchState('edit')"); await sleep(500); }
+                        const p = await c.ev(probe);
+                        const tag = `${w} 宽 ${st === 'read' ? '阅读' : '编辑'}「${title === long ? '长标题' : '短标题'}」`;
+                        check(`${tag}：不压左右按钮、不撑出横向滚动`, p.gapL >= 0 && p.gapR >= 0 && p.sw <= w, p);
+                        if (p.room) check(`${tag}：放得下，按窗口居中`, Math.abs(p.off) <= 1, p);
+                        // 放不下时尽量靠中：只往按钮少的一边让开必要的距离，贴着按钮多的那边（12 = 标题区内边距）
+                        else check(`${tag}：放不下，只让开必要的距离`, Math.min(p.gapL, p.gapR) <= 13, p);
+                    }
+                }
+            } finally { c.close(); }
+        }
+    });
+
     m.close();
 
     // ---------------- 电脑 1280 ----------------
