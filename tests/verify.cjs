@@ -941,6 +941,95 @@ async function caseRun(name, fn) {
         }
     });
 
+    // 编辑页目录（2026-10-24 新加）：手机上顶栏按钮打开、点了跳编辑框 / 预览、内容改了目录跟着变
+    const TOC_DOC = (() => {
+        const L = ['# 总标题', ''];
+        for (let i = 1; i <= 8; i++) {
+            L.push(`## 第${i}章`, '');
+            for (let p = 0; p < 6; p++) L.push(`第${i}章正文第${p + 1}段，这一段写得比较长，好让它在窄屏上自动换行成好几行，检验跳转后编辑框停的位置准不准。`, '');
+            if (i === 2) L.push('```python', '# 代码块里的注释不是标题', '```', '', '$$', '', 'a', '# 公式块里的也不是', '', '$$', '');
+            if (i === 3) L.push('### 3.1 带 **粗体** 和 `代码` 的标题', '', '#### 四级 &amp; 实体', '', '##### 五级不收', '');
+            if (i === 5) L.push('脚注引用[^1]。', '', '[^1]: 脚注内容。', '');
+        }
+        return L.join('\n');
+    })();
+    const tocItems = c => c.ev("[...document.querySelectorAll('#toc-content .toc-link')].map(a => a.className.match(/toc-h(\\d)/)[1] + ' ' + a.textContent)");
+    // 编辑框里第 offset 个字那一行的顶边，用 div 镜像另算一遍（跟页面里用编辑框量的方法不同，互相印证）
+    const MIRROR_TOP = `((offset) => { const ta = editorTextarea, cs = getComputedStyle(ta), d = document.createElement('div');
+        ['fontFamily','fontSize','lineHeight','letterSpacing','paddingTop','paddingRight','paddingBottom','paddingLeft','wordBreak','overflowWrap'].forEach(p => d.style[p] = cs[p]);
+        d.style.cssText += ';position:absolute;visibility:hidden;white-space:pre-wrap;box-sizing:border-box;width:' + ta.clientWidth + 'px';
+        d.textContent = ta.value.slice(0, offset); const s = document.createElement('span'); s.textContent = 'x'; d.appendChild(s);
+        document.body.appendChild(d); const top = s.offsetTop; d.remove(); return top; })`;
+
+    await caseRun('编辑页目录（手机）：顶栏按钮打开、点了跳过去、改了内容目录跟着变', async () => {
+        await reset(m, dbJs([{ id: 'a', title: '目录', content: TOC_DOC }]));
+        // 文档里有公式：等公式渲染完、阅读页目录生成出来再取（数学公式阅读器的 MathJax 是按需加载的，要好几秒）
+        await openFromDrawer(m, '目录'); await waitFor(m, "currentState === 'read' && document.querySelectorAll('#toc-content .toc-link').length > 0", 20000);
+        const readToc = await tocItems(m);
+        await m.ev("switchState('edit')"); await sleep(800);
+        check('编辑页顶栏有目录按钮', await m.ev("document.getElementById('btn-toc-toggle').getClientRects().length > 0"));
+        await m.ev("editorTextarea.focus(); true");
+        await m.ev("document.getElementById('btn-toc-toggle').click()"); await sleep(450);
+        check('点了从左边滑出目录', await m.ev("document.getElementById('toc-sidebar').classList.contains('mobile-open')"));
+        check('打开目录时收起键盘（编辑框失去焦点）', await m.ev('document.activeElement !== editorTextarea'));
+        const items = await tocItems(m);
+        check('跟阅读页的目录一模一样（代码块、公式块里的 # 不算，五级不收）', J(items) === J(readToc) && items.length === 11, { items, readToc });
+        check('标题里的粗体、代码、&amp; 显示成纯文字', items.includes('3 3.1 带 粗体 和 代码 的标题') && items.includes('4 四级 & 实体'), items);
+
+        await m.ev("[...document.querySelectorAll('#toc-content .toc-link')].find(a => a.textContent === '第6章').click()"); await sleep(500);
+        const r = await m.ev(`(() => { const off = editorTextarea.value.indexOf('## 第6章'); return { open: document.getElementById('toc-sidebar').classList.contains('mobile-open'), focused: document.activeElement === editorTextarea, st: editorTextarea.scrollTop, top: ${MIRROR_TOP}(off) }; })()`);
+        check('点了目录收起、不弹键盘', !r.open && !r.focused, r);
+        check('编辑框滚到「第6章」那一行（行顶离可视区顶 0~16px）', r.top - r.st >= 0 && r.top - r.st <= 16, r);
+
+        await m.ev("document.getElementById('tab-preview').click()"); await sleep(1200);
+        const pv = await m.ev("(() => { const p = document.querySelector('.preview-pane').getBoundingClientRect(); const h = [...document.querySelectorAll('#editor-preview h2')].find(h => h.textContent === '第6章'); return Math.round(h.getBoundingClientRect().top - p.top); })()");
+        check('切到预览，对准的也是「第6章」', pv >= 0 && pv < 40, pv);
+        check('脚注照常渲染、编号从 1 开始（目录用的分词没弄乱脚注扩展）', await m.ev("(() => { const a = document.querySelector('#editor-preview sup a'); return !!a && a.textContent === '1' && !!document.querySelector('#editor-preview section.footnotes li'); })()"));
+
+        // 改内容：删掉第 8 章、加一个新标题，再打开目录
+        await m.ev("document.getElementById('tab-edit').click(); editorTextarea.value = editorTextarea.value.replace('## 第8章', '第8章（不再是标题）') + '\\n\\n## 新加的一章\\n'; editorTextarea.dispatchEvent(new Event('input')); true");
+        await m.ev("document.getElementById('btn-toc-toggle').click()"); await sleep(450);
+        const after = await tocItems(m);
+        check('改了内容再打开：删掉的不在、新加的在，顺序对', !after.includes('2 第8章') && after[after.length - 1] === '2 新加的一章', after);
+
+        // 复审：点过目录后自己用手指滑了编辑框，再切分屏，不该被拽回点过的那个标题
+        await m.ev("[...document.querySelectorAll('#toc-content .toc-link')].find(a => a.textContent === '第6章').click()"); await sleep(400);
+        await m.ev("editorTextarea.dispatchEvent(new TouchEvent('touchstart', { bubbles: true, touches: [] })); editorTextarea.scrollTop = 0; true");
+        await m.ev("document.getElementById('tab-split').click()"); await sleep(900);
+        check('点目录后手动滑回顶部，切分屏不被拽回第6章', (await m.ev('editorTextarea.scrollTop')) < 50, await m.ev('editorTextarea.scrollTop'));
+        await m.ev("document.getElementById('tab-edit').click()"); await sleep(200);
+        check('全程没有脚本报错', m.errors.length === 0, m.errors);
+    });
+
+    await caseRun('编辑页目录：标题里有 < & 这类字符，跟阅读页显示的一样', async () => {
+        // 第二轮复审：行内代码里的 &amp; 原样显示（不还原成 &）；只有一个锚点标签、没有字的标题不显示标签源码
+        const doc = '# 比较 x<y && y>z\n\n## A &amp; B &#x4e2d;\n\n## 用 <b>粗</b> 写的\n\n## 代码 `&amp;` 原样\n\n## <a id="x"></a>\n\n## ![logo](a.png) 带图片的标题\n\n正文';
+        await reset(m, dbJs([{ id: 'a', title: '符号', content: doc }]));
+        await openFromDrawer(m, '符号'); await sleep(600);
+        // 阅读页那条没有字的标题会显示成一条空白；编辑页干脆不收——比较时去掉它
+        const readToc = (await tocItems(m)).filter(s => s.trim().length > 1).map(s => s.replace(/^(\d) +/, '$1 ').trim());
+        await m.ev("switchState('edit')"); await sleep(600);
+        await m.ev("document.getElementById('btn-toc-toggle').click()"); await sleep(450);
+        const items = await tocItems(m);
+        check('编辑页目录文字 = 阅读页目录文字（含图片的标题不带图片说明文字）', J(items) === J(readToc) && items.includes('2 代码 &amp; 原样') && items.includes('2 带图片的标题'), { items, readToc });
+        check('没有字的标题不显示成 <a id=…> 这种源码', !items.some(s => s.includes('<a')), items);
+        await m.ev('closeTocMobile()'); await sleep(350);
+    });
+
+    await caseRun('编辑页目录（手机）：带 front matter 时跳转不错行', async () => {
+        const doc = '---\ntitle: x\ntags: [a, b]\n---\n# 开头\n\n' + Array.from({ length: 40 }, (_, i) => `## 节${i}\n\n正文 ${i}\n`).join('\n');
+        await reset(m, dbJs([{ id: 'a', title: 'fm', content: doc }]));
+        await openFromDrawer(m, 'fm'); await sleep(600);
+        await m.ev("switchState('edit')"); await sleep(600);
+        await m.ev("document.getElementById('btn-toc-toggle').click()"); await sleep(450);
+        await m.ev("[...document.querySelectorAll('#toc-content .toc-link')].find(a => a.textContent === '节30').click()"); await sleep(400);
+        const r = await m.ev(`(() => { const off = editorTextarea.value.indexOf('## 节30'); return { st: editorTextarea.scrollTop, top: ${MIRROR_TOP}(off) }; })()`);
+        check('编辑框停在「节30」', r.top - r.st >= 0 && r.top - r.st <= 16, r);
+        await m.ev("document.getElementById('tab-split').click()"); await sleep(1200);
+        const pv = await m.ev("(() => { const p = document.querySelector('.preview-pane').getBoundingClientRect(); const h = [...document.querySelectorAll('#editor-preview h2')].find(h => h.textContent === '节30'); return Math.round(h.getBoundingClientRect().top - p.top); })()");
+        check('分屏下预览也对准「节30」（扣掉了 front matter 的行数）', pv >= 0 && pv < 40, pv);
+    });
+
     m.close();
 
     // ---------------- 电脑 1280 ----------------
@@ -1021,6 +1110,67 @@ async function caseRun(name, fn) {
         await sleep(300);
         const r = await d.ev("(() => { const p = document.querySelector('.preview-pane').getBoundingClientRect(); const li = [...document.querySelectorAll('#editor-preview li')].find(l => l.textContent.startsWith('第30题')); return { rel: Math.round(li.getBoundingClientRect().top - p.top), hl: li.classList.contains('sync-highlight') }; })()");
         check('第 30 题顶到预览上方并闪一下', r.rel >= 0 && r.rel < 40 && r.hl, r);
+    });
+
+    await caseRun('编辑页目录（电脑）：侧栏常驻、打字时跟着变、点了光标放到标题行、可收起', async () => {
+        await reset(d, dbJs([{ id: 'a', title: '目录', content: TOC_DOC }]));
+        await openFromDrawer(d, '目录'); await sleep(800);
+        await d.ev("switchState('edit')"); await sleep(1000);
+        check('编辑页左边有目录栏', await d.ev("!document.getElementById('toc-sidebar').classList.contains('collapsed') && document.getElementById('toc-sidebar').getBoundingClientRect().width > 200"));
+        check('目录 11 条', (await tocItems(d)).length === 11, await tocItems(d));
+
+        await d.ev("[...document.querySelectorAll('#toc-content .toc-link')].find(a => a.textContent === '第5章').click()"); await sleep(600);
+        const r = await d.ev(`(() => { const v = editorTextarea.value, off = v.indexOf('## 第5章'); const p = document.querySelector('.preview-pane').getBoundingClientRect();
+            const h = [...document.querySelectorAll('#editor-preview h2')].find(h => h.textContent === '第5章');
+            return { focused: document.activeElement === editorTextarea, caretLine: v.slice(v.lastIndexOf('\\n', editorTextarea.selectionStart - 1) + 1, editorTextarea.selectionStart),
+                     st: editorTextarea.scrollTop, top: ${MIRROR_TOP}(off), pv: Math.round(h.getBoundingClientRect().top - p.top),
+                     active: (document.querySelector('#toc-content .toc-link.active') || {}).textContent }; })()`);
+        check('光标放在「## 第5章」行末、编辑框有焦点', r.focused && r.caretLine === '## 第5章', r);
+        check('编辑框和预览都对准第5章，目录高亮第5章', r.top - r.st >= 0 && r.top - r.st <= 16 && r.pv >= 0 && r.pv < 40 && r.active === '第5章', r);
+
+        await d.send('Input.insertText', { text: '\n\n## 打字加的标题' }); await sleep(700);
+        check('打字加标题，停一下目录就有了（不用重开）', (await tocItems(d)).includes('2 打字加的标题'), await tocItems(d));
+        check('目录高亮跟着光标到了新标题', (await d.ev("(document.querySelector('#toc-content .toc-link.active') || {}).textContent")) === '打字加的标题');
+
+        // 复审：在开头打字，后面的标题都挪了位置——目录不整个重做（同一批元素），但点了照样跳到对的地方
+        await d.ev("window.__firstLink = document.querySelector('#toc-content .toc-link'); editorTextarea.focus(); editorTextarea.setSelectionRange(0, 0); true");
+        await d.send('Input.insertText', { text: '开头加一段字\n\n' }); await sleep(700);
+        check('在开头打字：目录没整个重做', await d.ev("document.querySelector('#toc-content .toc-link') === window.__firstLink"));
+        await d.ev("[...document.querySelectorAll('#toc-content .toc-link')].find(a => a.textContent === '第7章').click()"); await sleep(500);
+        const r2 = await d.ev("(() => { const v = editorTextarea.value, s = editorTextarea.selectionStart; return v.slice(v.lastIndexOf('\\n', s - 1) + 1, s); })()");
+        check('位置挪过之后点「第7章」，光标还是落在「## 第7章」', r2 === '## 第7章', r2);
+
+        // 第二轮复审：点「重置」整篇换回进来时的内容，目录要跟着换回去
+        await d.ev("document.getElementById('btn-edit-reset').click()");
+        check('重置时弹出确认框', await dlgClick(d, '恢复'));
+        await sleep(500);
+        check('重置后目录里没有刚才打字加的标题', !(await tocItems(d)).includes('2 打字加的标题'), await tocItems(d));
+
+        // 第三轮复审：删掉一行、250ms 内马上点目录，位置要按删完的内容算
+        const r3 = await d.ev(`(() => { const v = editorTextarea.value; const i = v.indexOf('第1章正文第1段'); const e = v.indexOf('\\n', i) + 1;
+            editorTextarea.value = v.slice(0, i) + v.slice(e); editorTextarea.dispatchEvent(new Event('input'));
+            [...document.querySelectorAll('#toc-content .toc-link')].find(a => a.textContent === '第5章').click();
+            const w = editorTextarea.value, s = editorTextarea.selectionStart; return w.slice(w.lastIndexOf('\\n', s - 1) + 1, s); })()`);
+        check('刚删了一行马上点「第5章」，光标落在「## 第5章」', r3 === '## 第5章', r3);
+
+        // 复审：从编辑页回阅读页，新内容还没渲染完那一下，阅读页的目录高亮不能读到编辑页的条目报错
+        d.errors.length = 0;
+        await d.ev("(async () => { const p = switchState('read'); window.__stateNow = currentState; window.__staleLinks = document.querySelectorAll('#toc-content .toc-link').length; try { updateTocActive(); } catch (e) { window.__tocErr = String(e); } await p; })()"); await sleep(800);
+        check('回阅读页的那一下（已是阅读状态、正文还没渲染完）目录高亮不报错', (await d.ev('window.__stateNow')) === 'read' && !(await d.ev('window.__tocErr')) && d.errors.length === 0, [await d.ev('window.__stateNow'), await d.ev('window.__tocErr'), d.errors]);
+        // 目录每次停顿要整篇分词一遍：2000 行的文档量一下多久（预览渲染同样大小约 100ms+）
+        const ms = await d.ev("(() => { const L = []; for (let i = 0; i < 400; i++) L.push('## 节' + i, '', '- 列表 $x_' + i + '^2$', '| a | b |', '|---|---|', '| 1 | 2 |', ''); const big = L.join('\\n'); sourceHeadings(big); const t = performance.now(); for (let k = 0; k < 5; k++) sourceHeadings(big); return (performance.now() - t) / 5; })()");
+        check(`目录分词 2800 行用时 ${ms.toFixed(1)}ms（< 30ms）`, ms < 30, ms);
+        check('离开编辑页那一下，目录栏里不再挂着编辑页的条目', (await d.ev('window.__staleLinks')) === 0, await d.ev('window.__staleLinks'));
+        await d.ev("switchState('edit')"); await sleep(800);
+
+        await d.ev("document.getElementById('btn-toc-toggle').click()"); await sleep(400);
+        check('点顶栏按钮收起目录栏，并记住', await d.ev("document.getElementById('toc-sidebar').classList.contains('collapsed') && localStorage.getItem('mdr-toc-hidden') === '1'"));
+        await d.ev("document.getElementById('btn-toc-toggle').click()"); await sleep(400);
+
+        await d.ev("editorTextarea.value = '没有标题的正文'; editorTextarea.dispatchEvent(new Event('input')); true"); await sleep(700);
+        const empty = await d.ev("({ open: !document.getElementById('toc-sidebar').classList.contains('collapsed'), text: document.getElementById('toc-content').textContent })");
+        check('删光标题：目录栏不突然消失（编辑框不跟着变宽重排），显示暂无目录', empty.open && empty.text.includes('暂无目录'), empty);
+        check('全程没有脚本报错', d.errors.length === 0, d.errors);
     });
 
     d.close();

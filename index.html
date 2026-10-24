@@ -659,26 +659,33 @@
             // 再挪到文末，换成新数组的话脚注区会渲染在文档最上面。也绝不往第 0 位前插东西
             //（占位 token 就在那儿，它不插标记）。tokens.links 等挂在数组对象上的东西也因此保住。
             tokens.length = 0;
-            let from = 0, line = 0, lineOffset = 0;
-            const lineAt = (offset) => {
-                for (let i = lineOffset; i < offset; i++) if (src.charCodeAt(i) === 10) line++;
-                lineOffset = offset;
-                return line;
-            };
+            const walk = makeLineWalker(src);
             for (const token of original) {
                 const raw = token.raw || '';
                 if (UNMARKED_TYPES.has(token.type) || !raw) { tokens.push(token); continue; }
-                let idx = src.indexOf(raw, from);
-                if (idx === -1) idx = from;
-                const startLine = lineAt(idx);
+                const { idx, line: startLine } = walk(raw);
                 const endLine = startLine + Math.max(0, raw.replace(/\n+$/, '').split('\n').length - 1);
                 const index = markBlocksOut.length;
                 markBlocksOut.push({ index, type: token.type, startLine, endLine, offset: idx, token });
                 tokens.push({ type: 'html', block: true, pre: false, raw: '', text: `<div class="kb-block-mark" data-block="${index}" data-start-line="${startLine}" data-end-line="${endLine}"></div>\n` });
                 tokens.push(token);
-                from = idx + raw.length;
             }
             return tokens;
+        }
+        // 按文档顺序在源码里找每个顶层 token 的 raw，得出它从第几个字（idx）、第几行（line）开始。
+        // annotateBlocks（编辑预览的行号标记）和编辑页目录共用这一份，两边的行号才不会各算各的。
+        // 必须从上一块的结尾往后找：内容相同的两块（判断题这种文档里很常见）会被一起匹配到最前面那一处。
+        // 找不到（极少见）就当它紧接在上一块后面。
+        function makeLineWalker(src) {
+            let from = 0, line = 0, lineOffset = 0;
+            return (raw) => {
+                let idx = src.indexOf(raw, from);
+                if (idx === -1) idx = from;
+                for (let i = lineOffset; i < idx; i++) if (src.charCodeAt(i) === 10) line++;
+                lineOffset = idx;
+                from = idx + raw.length;
+                return { idx, line };
+            };
         }
 
         marked.use(
@@ -1180,7 +1187,7 @@
                     headerUI.btnEditReset.classList.remove('hidden');
                     headerUI.btnEditSave.classList.remove('hidden'); headerUI.btnTheme.classList.remove('hidden');
                 }
-                tocSidebar.classList.add('collapsed');
+                updateTocLayout();
             }
         }
 
@@ -1196,7 +1203,11 @@
             // 草稿只在「人还在编辑页」或「页面被关掉 / 杀掉」时才需要留着，那两种情况都不会走到这里。
             // （选「不保存」后又半路放弃的，人还在编辑页，草稿也就还在。）
             if (prevState === 'edit' && editingId) { clearOwnDraft(editingId); editingId = null; }
-            if (prevState === 'edit') { clearTimeout(previewTimer); previewDirty = false; } // 离开编辑页：还没到点的预览渲染作废
+            if (prevState === 'edit') {
+                clearTimeout(previewTimer); previewDirty = false; // 离开编辑页：还没到点的预览渲染作废
+                // 编辑页的目录也撤掉：阅读页渲染完才换上它自己的目录，这中间别还挂着编辑页的条目
+                clearEditToc(); tocPending = null;
+            }
             hideResumePill();
             disablePosSave();
             currentState = newState;
@@ -1225,6 +1236,8 @@
                 editorTextarea.scrollTop = 0; previewPane.scrollTop = 0; cursorPlaced = false;
                 setEditTab(lsGet(EDIT_TAB_KEY) === 'split' ? 'split' : 'edit', false);
                 await restoreDraftIfAny();
+                tocPending = null;
+                if (editTocVisible()) generateEditTOC(true);
                 previewDirty = true;
                 if (previewVisible()) await flushPreview();
             }
@@ -1728,7 +1741,11 @@
             }
         }, { passive: true });
 
-        const openTocMobile = () => { showLayer(tocOverlay); tocSidebar.classList.add('mobile-open'); };
+        const openTocMobile = () => {
+            // 编辑页：先收起键盘（目录盖在编辑框上，键盘留着只会挡住下半截目录），再按当前内容现做一份目录
+            showLayer(tocOverlay); tocSidebar.classList.add('mobile-open');
+            if (currentState === 'edit') { editorTextarea.blur(); generateEditTOC(true); }
+        };
         const closeTocMobile = () => { if (!tocSidebar.classList.contains('mobile-open')) return; hideLayer(tocOverlay); tocSidebar.classList.remove('mobile-open'); };
         btnFabToc.onclick = openTocMobile;
         tocOverlay.onclick = closeTocMobile;
@@ -1845,6 +1862,9 @@
             if (!(await confirmAsk('恢复到未修改前？', '编辑框会回到这次进入编辑时的内容。', '恢复', true))) return;
             editorTextarea.value = originalContent;
             clearDraft(currentFile.id);
+            // 整篇换了内容：目录要重做，之前在目录里点过的位置也作废（赋值 value 不会触发 input 事件）
+            tocPending = null;
+            if (editTocVisible()) generateEditTOC(true);
             schedulePreview(true);
         }
         function copyContent(btnRef) {
@@ -2479,6 +2499,22 @@
         }
 
         function updateTocLayout() {
+            // 编辑页：按钮一直在，侧栏只看「收起」偏好、不看有没有标题——
+            // 不然打出第一个 # 时侧栏突然冒出来，编辑框整个变窄、字全部重排
+            if (currentState === 'edit') {
+                const btn = headerUI.btnTocToggle;
+                btn.classList.remove('hidden');
+                if (isMobileWidth()) {
+                    tocSidebar.classList.add('collapsed');
+                    btn.classList.remove('active'); btn.title = '目录';
+                } else {
+                    tocSidebar.classList.toggle('collapsed', tocHiddenPref);
+                    btn.classList.toggle('active', !tocHiddenPref);
+                    btn.title = tocHiddenPref ? '展开目录' : '收起目录';
+                    if (!tocHiddenPref) generateEditTOC(true);
+                }
+                return;
+            }
             if (currentState !== 'read') return;
             if (isMobileWidth()) {
                 tocSidebar.classList.add('collapsed');
@@ -2491,6 +2527,8 @@
             }
         }
         headerUI.btnTocToggle.onclick = () => {
+            // 手机编辑页没有悬浮目录按钮（底下是放弃/重置/保存那一排），顶栏这个按钮就是打开目录
+            if (currentState === 'edit' && isMobileWidth()) { openTocMobile(); return; }
             tocHiddenPref = !tocHiddenPref;
             lsSet('mdr-toc-hidden', tocHiddenPref ? '1' : '0');
             updateTocLayout();
@@ -2507,15 +2545,192 @@
                 const top = t.h.getBoundingClientRect().top;
                 if (top <= vr.top + 80 || (atBottom && top < vr.bottom)) cur = t; else break;
             }
-            const link = cur ? cur.link : null;
+            setActiveTocLink(cur ? cur.link : null);
+        }
+        // 阅读页、编辑页共用：换高亮的那一条，它滚出目录栏可视范围时把它带回来（只滚目录栏自己）
+        function setActiveTocLink(link) {
             if (link === activeTocLink) return;
             if (activeTocLink) activeTocLink.classList.remove('active');
             activeTocLink = link;
             if (!link) return;
             link.classList.add('active');
-            // 高亮的那条滚出目录栏可视范围时，把它带回来（只滚目录栏自己）
             const sr = tocSidebar.getBoundingClientRect(), lr = link.getBoundingClientRect();
             if (sr.height > 0 && (lr.top < sr.top + 40 || lr.bottom > sr.bottom - 40)) tocSidebar.scrollTop += lr.top - sr.top - sr.height / 3;
+        }
+
+        // ================= 编辑页的目录 =================
+        // 阅读页的目录取自渲染好的正文；编辑页不行——手机「编辑」标签下预览根本不渲染（P2-6）。
+        // 所以直接从源码分词拿标题：只分词、不产出任何 HTML（XSS 约束见 renderMarkdown）。
+        // 用单独的 Marked 实例，不能用全局的 marked.lexer：脚注扩展把「这篇有脚注」和脚注编号计数器存在扩展自己身上，
+        // 只有完整的 marked.parse 跑完才复位——单独 lexer 一次，下一次正式渲染就报错、脚注编号错位（2026-10-24 实测）。
+        // 这个实例只带会影响「哪一行算标题」的公式扩展（$$ 块里的 # 不是标题），这两个扩展没有自己的状态，可以共用。
+        // 代码块里的 # 不算标题、=== 下划线式标题算，跟真正渲染时一样。
+        // 跟阅读页目录（取自渲染好的正文）有两处不同，都是有意的：
+        //   ① 只认顶层的 1~4 级标题。引用块、列表里的标题，和直接写成 <h2> 的 HTML，阅读页收、这里不收——
+        //      它们在源码里前面带着 > 或缩进，或者根本不是 markdown 标题，没法照顶层块那样算行号。这种写法很少见。
+        //   ② 标题里的公式显示的是源码（$x^2$ 显示成 x^2），阅读页显示的是公式排出来后的文字。
+        // 每条记下它在编辑框里从第几个字开始（offset），点了就把编辑框和预览滚到那里。
+        // 编辑页的目录条目单独放在 editTocLinks，不跟阅读页的 tocLinks 混用：两边每条的内容不一样
+        // （阅读页存的是正文里的标题元素），混用时从编辑页回到阅读页、新内容还没渲染完那一下，阅读页的高亮会读到编辑页的条目报错。
+        let editTocLinks = [];
+        let tocPending = null;        // 目录里刚点的那条 { offset, line, bodyLine }；光标一动、或手动滑动编辑框 / 预览，就清掉
+        let editTocKey = null, editTocTimer = null;
+        function clearEditToc() {
+            clearTimeout(editTocTimer); editTocTimer = null;
+            tocContent.innerHTML = ''; editTocLinks = []; activeTocLink = null; editTocKey = null;
+        }
+        let entityDecoder = null, tocMarked = null;
+        function plainInline(tokens) {
+            let s = '';
+            for (const t of tokens || []) {
+                if (t.type === 'html') continue;                  // 行内 HTML 标签本身不算字，标签中间的字是单独的 text
+                // 图片的说明文字、换行：阅读页目录取的是标题的 textContent，这两样都不出字，这里也不出
+                //（图片 token 自己也带着 tokens，这条必须排在下面的递归前面）
+                if (t.type === 'image' || t.type === 'br') continue;
+                if (Array.isArray(t.tokens) && t.tokens.length) s += plainInline(t.tokens);
+                // 只有普通文字里的 &amp; 要还原成 &；行内代码、反斜杠转义里的是用户要原样显示的字（阅读页也原样显示）
+                else if (t.type === 'text') s += decodeEntities(t.text);
+                else if (typeof t.text === 'string') s += t.text;  // codespan / escape / 公式源码
+            }
+            return s;
+        }
+        // 只还原 &amp; &#39; &#x4e2d; 这类字符实体本身，一个一个单独还原。
+        // 不能把整段文字交给 DOMParser：标题「x<y && y>z」里的 <y && y> 会被当成标签，中间的字就没了。
+        const ENTITY_RE = /&(?:#\d+|#x[0-9a-f]+|[a-z][a-z0-9]*);/gi;
+        function decodeEntities(s) {
+            if (!s.includes('&')) return s;
+            // DOMParser 生成的文档是惰性的：不执行脚本、不加载图片；喂进去的只有一个实体，里面没有 <
+            entityDecoder = entityDecoder || new DOMParser();
+            return s.replace(ENTITY_RE, m => entityDecoder.parseFromString(`<!doctype html><body>${m}`, 'text/html').body.textContent);
+        }
+        function sourceHeadings(value) {
+            const fmChars = value.length - stripFrontMatter(value).length;
+            const body = value.slice(fmChars);
+            const fmLines = (value.slice(0, fmChars).match(/\n/g) || []).length;
+            let tokens;
+            try {
+                tocMarked = tocMarked || new marked.Marked({ gfm: true, breaks: true }, { extensions: [mathBlockExtension, mathExtension] });
+                tokens = tocMarked.lexer(body);
+            } catch (_) { return []; }
+            const out = [];
+            const walk = makeLineWalker(body);
+            for (const t of tokens) {
+                const raw = t.raw || '';
+                if (!raw) continue;
+                const { idx, line } = walk(raw);
+                if (t.type !== 'heading' || t.depth > 4) continue;
+                // 标题里只有 HTML 标签、没有字（比如只放了一个锚点 <a id="x"></a>）：没有可显示的字，不收
+                const text = (Array.isArray(t.tokens) ? plainInline(t.tokens) : t.text || '').trim();
+                if (!text) continue;
+                out.push({ depth: t.depth, text, bodyLine: line, line: line + fmLines, offset: fmChars + idx });
+            }
+            return out;
+        }
+        function cursorSourceLine() {
+            return (editorTextarea.value.slice(0, editorTextarea.selectionStart).match(/\n/g) || []).length;
+        }
+        const editTocVisible = () => currentState === 'edit' && (isMobileWidth() ? tocSidebar.classList.contains('mobile-open') : !tocHiddenPref);
+        // 打字时：停顿 250ms 再重做目录，而且只在目录看得见时做（手机上目录是打开时现做的）
+        function scheduleEditTOC() {
+            clearTimeout(editTocTimer);
+            if (!editTocVisible()) return;
+            editTocTimer = setTimeout(() => generateEditTOC(false), 250);
+        }
+        function generateEditTOC(force) {
+            if (currentState !== 'edit') return;
+            clearTimeout(editTocTimer);
+            // 刚进编辑页、编辑框还没填上这篇的内容（applyChrome 先于填内容）：先清空，别拿上一篇的内容做目录
+            if (!editingId) { clearEditToc(); return; }
+            const items = sourceHeadings(editorTextarea.value);
+            const key = items.map(i => `${i.depth}\u0001${i.text}`).join('\u0002');
+            // 标题的级别和文字都没变（大多数时候是在正文里打字，只是后面标题的位置挪了）：
+            // 只把新位置写回现有的条目，不重做目录，目录栏的滚动位置、鼠标悬停都不动
+            if (!force && key === editTocKey) {
+                items.forEach((it, i) => Object.assign(editTocLinks[i].item, it));
+                updateEditTocActive();
+                return;
+            }
+            editTocKey = key;
+            tocContent.innerHTML = '';
+            editTocLinks = [];
+            activeTocLink = null;
+            if (!items.length) {
+                const empty = document.createElement('div');
+                empty.className = 'toc-empty';
+                empty.textContent = '暂无目录（用 # 开头写标题）';
+                tocContent.appendChild(empty);
+            }
+            items.forEach(item => {
+                const link = document.createElement('a');
+                link.href = '#'; link.className = `toc-link toc-h${item.depth}`; link.textContent = item.text;
+                link.onclick = (e) => {
+                    e.preventDefault();
+                    // 刚改过内容、250ms 的重做还没到点：位置可能已经挪了，先按现在的内容重算一遍（约 10ms），
+                    // 再去找这条标题；目录因此重做了的话，按文字找回同一条
+                    generateEditTOC(false);
+                    const same = editTocLinks.find(t => t.item === item) || editTocLinks.find(t => t.item.depth === item.depth && t.item.text === item.text);
+                    if (same) jumpEditTo(same.item);
+                };
+                tocContent.appendChild(link);
+                editTocLinks.push({ item, link });
+            });
+            updateEditTocActive();
+        }
+        // 高亮光标所在的那一节；刚在目录里点过、光标还没动，高亮点的那一条。还没点过编辑框就不高亮
+        function updateEditTocActive() {
+            if (!editTocVisible() || !editTocLinks.length) return;
+            const line = tocPending ? tocPending.line : cursorPlaced ? cursorSourceLine() : -1;
+            let cur = null;
+            if (line >= 0) for (const t of editTocLinks) { if (t.item.line <= line) cur = t; else break; }
+            setActiveTocLink(cur ? cur.link : null);
+        }
+        // 编辑框里第 offset 个字所在那一行的顶边，离编辑框内容顶部多少像素。
+        // 用一个看不见的、同宽同字体的编辑框，只放 offset 之前的字去量 scrollHeight——换行、中英文断行
+        // 都是浏览器自己排的，跟真编辑框一模一样，不用自己数「一行能放几个字」。
+        let measureTa = null;
+        const MEASURE_PROPS = ['boxSizing', 'fontFamily', 'fontSize', 'fontWeight', 'fontStyle', 'letterSpacing', 'lineHeight', 'wordSpacing',
+            'textIndent', 'tabSize', 'textTransform', 'whiteSpace', 'wordBreak', 'overflowWrap',
+            'paddingTop', 'paddingRight', 'paddingBottom', 'paddingLeft', 'borderTopWidth', 'borderRightWidth', 'borderBottomWidth', 'borderLeftWidth', 'borderStyle'];
+        function textareaLineTop(ta, offset) {
+            if (!measureTa) {
+                measureTa = document.createElement('textarea');
+                measureTa.setAttribute('aria-hidden', 'true'); measureTa.tabIndex = -1;
+                measureTa.style.cssText = 'position:absolute;left:-10000px;top:0;visibility:hidden;height:0;min-height:0;resize:none;';
+                document.body.appendChild(measureTa);
+            }
+            const cs = getComputedStyle(ta);
+            MEASURE_PROPS.forEach(p => { measureTa.style[p] = cs[p]; });
+            // 有没有竖滚动条会改变一行能放多宽：跟真编辑框保持一致
+            measureTa.style.overflowY = ta.scrollHeight > ta.clientHeight ? 'scroll' : 'hidden';
+            measureTa.style.width = ta.offsetWidth + 'px';
+            // 放进去的字以换行结尾（或者是空的）时，浏览器会多排一个空行：那个空行的顶边就是目标行的顶边
+            measureTa.value = ta.value.slice(0, offset);
+            const lh = parseFloat(cs.lineHeight) || parseFloat(cs.fontSize) * 1.6;
+            const top = measureTa.scrollHeight - parseFloat(cs.paddingBottom) - lh;
+            measureTa.value = ''; // 量完就清空，别让整篇文档的第二份副本一直挂在页面里
+            return top;
+        }
+        function scrollTextareaToOffset(offset) {
+            const ta = editorTextarea;
+            if (!ta.offsetParent) return; // 编辑框藏着（手机「预览」标签）：量不了，等切回来时 setEditTab 再滚
+            ta.scrollTop = Math.max(0, textareaLineTop(ta, offset) - 8);
+        }
+        function jumpEditTo(item) {
+            if (currentState !== 'edit') return; // 刚离开编辑页、阅读页目录还没换上来的那一下点到的
+            const mobile = isMobileWidth();
+            if (mobile) closeTocMobile();
+            tocPending = { offset: item.offset, line: item.line, bodyLine: item.bodyLine };
+            updateEditTocActive();
+            // 电脑上顺手把光标放到标题那一行末尾，点完就能接着写。手机上不动光标：
+            // 一 focus 键盘就弹出来，半个屏幕没了，用户只是想看看那一节
+            if (!mobile) {
+                const ta = editorTextarea, nl = ta.value.indexOf('\n', item.offset), end = nl === -1 ? ta.value.length : nl;
+                ta.focus({ preventScroll: true });
+                ta.setSelectionRange(end, end);
+                cursorPlaced = true;
+            }
+            scrollTextareaToOffset(item.offset);
+            if (previewVisible()) { if (previewDirty) flushPreview(); else scrollPreviewToCursor(); }
         }
 
         let tocRaf = 0;
@@ -2560,15 +2775,22 @@
         // 刚进编辑页、还没点过编辑框也没打过字时不跟光标：浏览器给编辑框填内容后光标默认在最末尾，
         // 跟着它滚的话就成了「编辑框在开头、预览在文末」（电脑并排和手机分屏一进来就对不上，2026-10-10 发现）。
         let cursorPlaced = false;
-        function scrollPreviewToCursor() {
-            if (!previewVisible() || !cursorPlaced) return;
-            const value = editorTextarea.value;
-            // 预览渲染的是去掉 YAML front matter 之后的正文（stripFrontMatter），行号是按正文算的；
-            // 光标行号却是按整个编辑框算的。原来没扣掉这一段，带 front matter 的文档光标同步
-            // 会整体错开 front matter 那么多行（2026-10-06 发现）。
+        // 预览渲染的是去掉 YAML front matter 之后的正文（stripFrontMatter），行号是按正文算的；
+        // 光标行号却是按整个编辑框算的。原来没扣掉这一段，带 front matter 的文档光标同步
+        // 会整体错开 front matter 那么多行（2026-10-06 发现）。
+        function frontMatterLines(value) { // 编辑框开头的 front matter 占了几行
             const fmLength = value.length - stripFrontMatter(value).length;
-            const fmLines = (value.slice(0, fmLength).match(/\n/g) || []).length;
-            const cursorLine = (value.slice(0, editorTextarea.selectionStart).match(/\n/g) || []).length - fmLines;
+            return (value.slice(0, fmLength).match(/\n/g) || []).length;
+        }
+        // 预览该对准哪一行：刚在目录里点过、之后光标还没动过，对准点的那个标题（tocPending）；否则对准光标
+        function scrollPreviewToCursor() {
+            if (!previewVisible()) return;
+            if (tocPending) { scrollPreviewToLine(tocPending.bodyLine); return; }
+            if (!cursorPlaced) return;
+            scrollPreviewToLine(cursorSourceLine() - frontMatterLines(editorTextarea.value));
+        }
+        function scrollPreviewToLine(cursorLine) {
+            if (!previewVisible()) return;
             const hit = locatePreviewLine(editorPreview, cursorLine);
             if (!hit) return;
             // 顶部对齐（不是 scrollIntoView center）：用户明确反馈"光标那一行在右边应该定位到最上面"，
@@ -2621,6 +2843,8 @@
             tabEditBtn.classList.toggle('on', tab === 'edit'); tabEditBtn.setAttribute('aria-selected', tab === 'edit');
             tabPreviewBtn.classList.toggle('on', tab === 'preview'); tabPreviewBtn.setAttribute('aria-selected', tab === 'preview');
             if (!sync) return;
+            // 在预览里点了目录、再切回编辑框：编辑框刚才是藏着的、没法滚，现在补上
+            if (tocPending && tab !== 'preview') scrollTextareaToOffset(tocPending.offset);
             // 切到预览：有没渲染的改动先渲染，然后定位到光标所在的那一块
             if (tab !== 'edit') { if (previewDirty) flushPreview(); else scrollPreviewToCursor(); }
         }
@@ -2630,9 +2854,16 @@
         tabPreviewBtn.onclick = () => pickEditTab('preview');
 
         const CURSOR_MOVE_KEYS = new Set(['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Home', 'End', 'PageUp', 'PageDown']);
-        editorTextarea.addEventListener('click', () => { cursorPlaced = true; scrollPreviewToCursor(); });
-        editorTextarea.addEventListener('keyup', e => { if (CURSOR_MOVE_KEYS.has(e.key)) { cursorPlaced = true; scrollPreviewToCursor(); } });
-        editorTextarea.addEventListener('input', () => { cursorPlaced = true; scheduleDraftSave(); schedulePreview(false); });
+        // 光标一动，就不再对准目录里点的那个标题了（tocPending），改回跟光标走；目录高亮也跟着光标
+        //（updateEditTocActive 在目录看不见时直接返回，不会每敲一个字都去数一遍光标前有几行）
+        const cursorMoved = () => { cursorPlaced = true; tocPending = null; updateEditTocActive(); };
+        // 点过目录后用手指 / 滚轮自己滑了编辑框或预览：也不再对准点的那个标题，免得切「编辑/分屏/预览」时被拽回去。
+        // 只认人的动作（手指、滚轮、按下鼠标——拖滚动条也是先按下），不认 scroll 事件——跳转本身也会触发 scroll
+        [editorTextarea, previewPane].forEach(el => ['touchstart', 'wheel', 'mousedown'].forEach(t => el.addEventListener(t, () => { tocPending = null; }, { passive: true })));
+        editorTextarea.addEventListener('click', () => { cursorMoved(); scrollPreviewToCursor(); });
+        editorTextarea.addEventListener('keyup', e => { if (CURSOR_MOVE_KEYS.has(e.key)) { cursorMoved(); scrollPreviewToCursor(); } });
+        // 打字时不当场更新目录高亮（每个字都要数一遍光标前有几行）：停顿 250ms 重做目录时一起更新
+        editorTextarea.addEventListener('input', () => { cursorPlaced = true; tocPending = null; scheduleDraftSave(); schedulePreview(false); scheduleEditTOC(); });
 
         // ================= 快捷键 =================
         // 编辑框里 Tab 缩进 / Shift+Tab 取消缩进（写嵌套列表要用；4 个空格，无序、有序列表都能嵌套）。
